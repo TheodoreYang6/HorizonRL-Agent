@@ -1,8 +1,9 @@
-# HorizonRL-Agent 系统开发手册 v1.0
+# HorizonRL-Agent 系统开发手册 v2.0
 
-> 最后更新: 2026-05-13
-> 测试: 314 passed, 4 skipped
-> 代码量: ~14,000 行
+> 最后更新: 2026-05-13 (Day 2 最终)
+> 测试: 323 passed, 4 skipped
+> 代码量: ~15,000 行
+> Phase 1+2 全部完成, GitHub 已发布
 
 ---
 
@@ -451,7 +452,9 @@ filter_events(filepath, module="worker")          # 按模块过滤
 | 02 | `02_simple_agent.py` | 最简端到端管道 | 否 | `python examples/02_simple_agent.py` |
 | 03 | `03_llm_demo.py` | LLM连接测试 + 智能规划 | 是 | `python examples/03_llm_demo.py --llm` |
 | 04 | `04_multi_agent_research.py` | **v1 旗舰** (6-Stage Pipeline) | 可选 | `python examples/04_multi_agent_research.py --llm` |
-| 05 | `05_web_agent.py` | Web 对话界面 | 自动检测 | `python examples/05_web_agent.py` |
+| 05 | `05_web_agent.py` | Web 对话界面 (双路由+SSE+下载) | 自动检测 | `python examples/05_web_agent.py` |
+| 06 | `06_ablation_study.py` | 消融实验 (5配置+压力注入) | 否 | `python examples/06_ablation_study.py` |
+| 07 | `07_benchmark.py` | Benchmark评测 (20题5类) | 否 | `python examples/07_benchmark.py` |
 
 **04 Demo 输出**:
 ```
@@ -620,24 +623,20 @@ HORIZON_SEARCH_PROVIDER=mock # 强制mock搜索
 ### 15.2 后续计划
 
 ```
-✅ 已完成 (本轮):
-  ✅ Writer v2 双模式 (UserAnswerWriter + DebugReportRenderer)
-  ✅ SearchProvenance + ReportMetadata
-  ✅ Web 双路由 (/api/chat + /api/report + /api/download)
-  ✅ CI 强制 mock 模式
-  ✅ 代码质量优化 (ruff + imports + prompt)
-  ✅ LLMPlanner 并行度优化
-  ✅ 314 tests
+✅ Phase 1 (14 Steps): 核心基础设施 — 全部完成
+✅ Phase 2 (4 Steps):
+  ✅ Step 15: 消融实验框架 (06_ablation_study.py + StressInjector)
+  ✅ Step 16: L3 FAISS 向量检索 (L3EpisodicArchive)
+  ✅ Step 17: Benchmark 评测 (07_benchmark.py, 20题5类)
+  ✅ Step 18: SSE 流式输出 (Web Demo 实时进度)
+✅ ChatGPT 产品化建议: 全部落地
 
-P1 (本月):
-  □ 流式输出 (SSE/WebSocket)
-  □ Bocha API 接入 (需 Key)
-  □ 消融实验框架
+Phase 3 (需 GPU):
+  □ RL 训练管线 (GRPO/PPO via TRL+veRL)
+  □ vLLM 批量推理
 
-P2 (下月):
-  □ L3 FAISS 向量检索
-  □ Benchmark 评测
-  □ 论文实验
+Phase 4 (论文):
+  □ 论文写作 + 对比基线
 ```
 
 ---
