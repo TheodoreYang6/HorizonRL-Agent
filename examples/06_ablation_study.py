@@ -101,6 +101,47 @@ class RunMetrics:
         }
 
 
+# ─── 压力注入器 ──────────────────────────────────────────────────────────────
+
+import random as _random
+
+class StressInjector:
+    """向工具输出中注入受控噪声，模拟真实环境中的各种失败。
+
+    压力类型:
+        - empty: 返回空结果 (触发 Verifier EMPTY_RESULT)
+        - error: 返回工具错误 (触发 Verifier TOOL_ERROR)
+        - degrade: 降低输出质量 (触发 Verifier 低分)
+        - none: 不注入噪声
+
+    参数:
+        base_failure_rate: 基础失败概率 (默认 0.2 = 20% 的工具调用失败)
+    """
+
+    def __init__(self, base_failure_rate: float = 0.2, seed: int = 42):
+        self.rate = base_failure_rate
+        self.rng = _random.Random(seed)
+
+    def should_inject(self) -> bool:
+        return self.rng.random() < self.rate
+
+    def inject(self, output: str) -> str:
+        """注入随机压力到工具输出。"""
+        roll = self.rng.random()
+        if roll < 0.35:
+            # 空结果
+            return ""
+        elif roll < 0.60:
+            # 工具错误
+            return '{"error": "Tool execution failed", "details": "Simulated stress injection"}'
+        elif roll < 0.85:
+            # 短路输出 (低质量)
+            return '{"title": "Short", "snippet": "ok"}'
+        else:
+            # 保留原输出但截断
+            return output[:50] if len(output) > 50 else output
+
+
 # ─── 实验运行器 ──────────────────────────────────────────────────────────────
 
 async def run_single_experiment(
@@ -108,6 +149,7 @@ async def run_single_experiment(
     config: AblationConfig,
     llm_client=None,
     tool_manager=None,
+    stress: StressInjector | None = None,
 ) -> RunMetrics:
     """对单个问题运行一次实验管道，收集指标。"""
     t0 = time.time()
@@ -154,6 +196,13 @@ async def run_single_experiment(
 
         for node, result in batch:
             results[result.task_id] = result
+
+            # ── 压力注入：模拟真实环境中的工具失败 ──
+            if stress and stress.should_inject():
+                result.success = False
+                result.output = stress.inject(result.output)
+                result.evidence = []  # 清空证据模拟失败
+
             metrics.tool_calls += len(result.tool_calls)
             metrics.evidence_count += len(result.evidence)
 
@@ -218,9 +267,10 @@ async def run_ablation_suite(
             AblationConfig("llm_planner", True, True, True, True)
         )
 
-    # 预注册工具 (共享) — 消融实验默认用 mock 保证速度和可重复性
+    # 预注册工具 + 压力注入器
     mgr = ToolManager()
     register_mock_tools(mgr)
+    stress = StressInjector(base_failure_rate=0.25, seed=42)
 
     results: dict[str, dict[str, RunMetrics]] = {}
 
@@ -232,7 +282,9 @@ async def run_ablation_suite(
 
         for cfg in configurations:
             print(f"  [{cfg.name:15s}] ", end="", flush=True)
-            metrics = await run_single_experiment(query, cfg, llm_client, mgr)
+            # no_verifier 配置不受 stress 影响 (它跳过验证)
+            cfg_stress = None if cfg.name == "no_verifier" else stress
+            metrics = await run_single_experiment(query, cfg, llm_client, mgr, cfg_stress)
             results[query][cfg.name] = metrics
             print(f"{metrics.success_rate:.0%} 成功, "
                   f"avg_score={metrics.avg_score:.2f}, "
