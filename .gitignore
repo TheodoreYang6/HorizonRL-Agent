@@ -73,3 +73,4 @@ resume_text.txt
 resume_text_new.txt
 scripts/update_resume.py
 .claude/settings.local.json
+chatgpt_suggestion.md
