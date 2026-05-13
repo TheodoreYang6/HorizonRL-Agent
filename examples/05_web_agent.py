@@ -423,8 +423,10 @@ HTML_PAGE = r"""<!DOCTYPE html>
 let isPolling = false;
 
 function send(){
-  const q=document.getElementById('query').value.trim();
+  const inp=document.getElementById('query');
+  const q=inp.value.trim();
   if(!q||isPolling)return;
+  inp.value='';  // 发送后清空输入框
   const mode=document.getElementById('modeSel').value;
   const btn=document.getElementById('btn');
   btn.disabled=true;btn.textContent='...';
