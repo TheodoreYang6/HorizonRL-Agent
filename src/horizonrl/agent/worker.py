@@ -163,31 +163,50 @@ class AgentWorker:
         now = time.time()
 
         if tool_name == "web_search":
-            parsed = self._try_parse_json(output)
-            is_mock = "[Mock]" in output or "mock-search" in output
-            if isinstance(parsed, list):
-                for entry in parsed:
-                    if isinstance(entry, dict):
-                        title = entry.get("title", "")
-                        snippet = entry.get("snippet", entry.get("body", str(entry)))
-                        url = entry.get("url", entry.get("href", ""))
-                        items.append(EvidenceItem(
-                            content=f"{title}: {snippet}" if title else snippet,
-                            source=url,
-                            source_type="web",
-                            provider="web_search",
-                            is_mock=is_mock or "mock" in url.lower(),
-                            retrieved_at=now,
-                        ))
+            # 优先使用 ToolManager 的规范化方法
+            query_text = task_id  # 从 task 推断 query
+            if self.tool_manager and hasattr(self.tool_manager, 'normalize_search_results'):
+                normalized = self.tool_manager.normalize_search_results(
+                    tool_name, output, query=query_text
+                )
+                for entry in normalized:
+                    items.append(EvidenceItem(
+                        content=f"{entry.get('title', '')}: {entry.get('snippet', '')}",
+                        source=entry.get("url", ""),
+                        source_type="web",
+                        provider=entry.get("provider", "web_search"),
+                        search_query=entry.get("query", ""),
+                        is_mock=entry.get("is_mock", False),
+                        retrieved_at=entry.get("timestamp", now),
+                    ))
             else:
-                items.append(EvidenceItem(
-                    content=output[:2000],
-                    source="web_search",
-                    source_type="web",
-                    provider="web_search",
-                    is_mock=is_mock,
-                    retrieved_at=now,
-                ))
+                # fallback: 旧的手动解析
+                parsed = self._try_parse_json(output)
+                is_mock = "[Mock]" in output or "mock-search" in output
+                if isinstance(parsed, list):
+                    for entry in parsed:
+                        if isinstance(entry, dict):
+                            title = entry.get("title", "")
+                            snippet = entry.get("snippet", entry.get("body", str(entry)))
+                            url = entry.get("url", entry.get("href", ""))
+                            items.append(EvidenceItem(
+                                content=f"{title}: {snippet}" if title else snippet,
+                                source=url,
+                                source_type="web",
+                                provider=entry.get("provider", "web_search"),
+                                search_query=query_text,
+                                is_mock=entry.get("is_mock", is_mock or "mock" in url.lower()),
+                                retrieved_at=now,
+                            ))
+                else:
+                    items.append(EvidenceItem(
+                        content=output[:2000],
+                        source="web_search",
+                        source_type="web",
+                        provider="web_search",
+                        is_mock=is_mock,
+                        retrieved_at=now,
+                    ))
 
         elif tool_name == "arxiv_search":
             parsed = self._try_parse_json(output)

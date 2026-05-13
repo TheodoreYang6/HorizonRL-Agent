@@ -15,9 +15,10 @@ from .mock import (
     MockWebSearch,
     register_mock_tools,
 )
-from .web_search import WebSearchTool
+from .web_search import SearchProvider, WebSearchTool
 
 __all__ = [
+    "SearchProvider",
     "WebSearchTool",
     "ArxivSearchTool",
     "CodeExecutionTool",

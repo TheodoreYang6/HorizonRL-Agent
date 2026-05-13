@@ -231,6 +231,64 @@ class ToolManager:
         """列出所有已注册的工具名称。"""
         return list(self._tools.keys())
 
+    # ── 搜索结果规范化 ──────────────────────────────────────────────────
+
+    def normalize_search_results(
+        self,
+        tool_name: str,
+        raw_output: str,
+        query: str = "",
+    ) -> list[dict]:
+        """将工具返回的原始 JSON 规范化为带 provenance 的 dict 列表。
+
+        ToolManager 负责统一填入 provider/query/timestamp/is_mock，
+        避免不同 provider 返回格式不一致。
+
+        Args:
+            tool_name: 工具名 (web_search / arxiv_search).
+            raw_output: 工具返回的原始 JSON 字符串.
+            query: 实际搜索 query.
+
+        Returns:
+            规范化后的 dict 列表，每条含 provider/query/is_mock/timestamp.
+        """
+        import json as _json
+        import time as _time
+
+        now = _time.time()
+        results: list[dict] = []
+
+        # 解析原始输出
+        try:
+            parsed = _json.loads(raw_output)
+        except (_json.JSONDecodeError, TypeError):
+            parsed = raw_output
+
+        if isinstance(parsed, list):
+            for entry in parsed:
+                if isinstance(entry, dict):
+                    results.append({
+                        "title": entry.get("title", ""),
+                        "url": entry.get("url", entry.get("href", "")),
+                        "snippet": entry.get("snippet", entry.get("body", str(entry))),
+                        "provider": entry.get("provider", tool_name),
+                        "is_mock": entry.get("is_mock", False),
+                        "query": query,
+                        "timestamp": now,
+                    })
+        else:
+            results.append({
+                "title": "",
+                "url": "",
+                "snippet": str(raw_output)[:2000],
+                "provider": tool_name,
+                "is_mock": "mock" in str(raw_output).lower(),
+                "query": query,
+                "timestamp": now,
+            })
+
+        return results
+
     # ── 工具调用 ────────────────────────────────────────────────────────
 
     async def call(self, request: ToolCallRequest) -> ToolCall:
