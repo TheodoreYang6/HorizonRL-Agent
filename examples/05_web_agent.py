@@ -38,8 +38,7 @@ from horizonrl.logging.trajectory_logger import TrajectoryLogger
 
 # ─── 全局状态 ────────────────────────────────────────────────────────────────
 
-_sessions: dict[str, dict] = {}  # session_id → {status, final_path, debug_path, query}
-_progress_queues: dict[str, asyncio.Queue] = {}  # SSE 进度推送
+_sessions: dict[str, dict] = {}  # session_id → {status, final_path, debug_path, query, progress_messages, current_phase}
 
 
 # ─── 复杂度分类器 ────────────────────────────────────────────────────────────
@@ -70,15 +69,15 @@ async def run_agent_pipeline(session_id: str, query: str):
     _sessions[session_id]["status"] = "running"
     t0 = time.time()
 
-    # 创建 SSE 进度队列
-    pq: asyncio.Queue = asyncio.Queue(maxsize=50)
-    _progress_queues[session_id] = pq
+    # 进度消息队列 (用于轮询)
+    _sessions[session_id]["progress_messages"] = []
+    _sessions[session_id]["current_phase"] = "starting"
 
-    async def emit(phase: str, message: str):
-        try:
-            pq.put_nowait(json.dumps({"phase": phase, "message": message}, ensure_ascii=False))
-        except asyncio.QueueFull:
-            pass
+    def emit(phase: str, message: str):
+        _sessions[session_id]["current_phase"] = phase
+        _sessions[session_id]["progress_messages"].append({
+            "phase": phase, "message": message, "ts": time.time(),
+        })
 
     try:
         # ── 基础设施 ──
@@ -113,7 +112,7 @@ async def run_agent_pipeline(session_id: str, query: str):
         # ── 规划 ──
         use_llm = llm_client is not None and should_use_agent(query)
         _sessions[session_id]["phase"] = "planning"
-        await emit("planning", f"正在将问题拆解为子任务...")
+        emit("planning", f"正在将问题拆解为子任务...")
         if use_llm:
             planner = LLMPlanner(llm_client)
             plan = await planner.plan(UserTask(description=query, max_steps=20))
@@ -123,7 +122,7 @@ async def run_agent_pipeline(session_id: str, query: str):
 
         # ── 执行 ──
         _sessions[session_id]["phase"] = "searching"
-        await emit("searching", f"正在搜索资料 (共 {plan.total_count()} 个子任务)...")
+        emit("searching", f"正在搜索资料 (共 {plan.total_count()} 个子任务)...")
         verifier = Verifier(mode="rule")
         replanner = Replanner(max_retries_per_task=3, max_total_replans=5)
         sem = asyncio.Semaphore(3)
@@ -177,7 +176,7 @@ async def run_agent_pipeline(session_id: str, query: str):
 
         # ── 报告 ──
         _sessions[session_id]["phase"] = "writing"
-        await emit("writing", f"正在撰写研究报告...")
+        emit("writing", f"正在撰写研究报告...")
         ctx = memory.get_context()
         writer_mode = "llm" if llm_client is not None else "template"
         writer = Writer(mode=writer_mode, llm_client=llm_client,
@@ -198,7 +197,7 @@ async def run_agent_pipeline(session_id: str, query: str):
         )
 
         # ── 完成 ──
-        await emit("completed", "研究报告已完成!")
+        emit("completed", "研究报告已完成!")
         final_text = Path(final_path).read_text(encoding="utf-8")
         _sessions[session_id].update({
             "status": "completed",
@@ -306,7 +305,12 @@ async def handle_api_report(request: web.Request) -> web.Response:
     if not session:
         return web.json_response({"error": "session not found"}, status=404)
 
-    resp = {"status": session["status"], "phase": session.get("phase", "")}
+    resp = {
+        "status": session["status"],
+        "phase": session.get("phase", ""),
+        "current_phase": session.get("current_phase", ""),
+        "progress_messages": session.get("progress_messages", []),
+    }
     if session["status"] == "completed":
         resp["final_answer"] = session.get("final_answer", "")
         resp["download_url_final"] = f"/api/download/{sid}/final"
@@ -339,48 +343,10 @@ async def handle_api_download(request: web.Request) -> web.Response:
     })
 
 
-async def handle_api_stream(request: web.Request) -> web.StreamResponse:
-    """GET /api/stream/{session_id} — SSE 实时进度流。"""
-    sid = request.match_info["session_id"]
-    queue = _progress_queues.get(sid)
-
-    resp = web.StreamResponse(
-        status=200,
-        reason="OK",
-        headers={
-            "Content-Type": "text/event-stream",
-            "Cache-Control": "no-cache",
-            "Connection": "keep-alive",
-        },
-    )
-    await resp.prepare(request)
-
-    if queue is None:
-        await resp.write(b"data: {\"phase\":\"error\",\"message\":\"session not found\"}\n\n")
-        return resp
-
-    try:
-        while True:
-            try:
-                data = await asyncio.wait_for(queue.get(), timeout=30.0)
-                await resp.write(f"data: {data}\n\n".encode("utf-8"))
-                # 检查是否完成
-                if '"completed"' in data or '"failed"' in data:
-                    break
-            except asyncio.TimeoutError:
-                await resp.write(b"data: {\"phase\":\"ping\"}\n\n")
-    except ConnectionResetError:
-        pass
-    finally:
-        _progress_queues.pop(sid, None)
-    return resp
-
-
 def create_app() -> web.Application:
     app = web.Application()
     app.router.add_get("/", handle_index)
     app.router.add_post("/api/chat", handle_api_chat)
-    app.router.add_get("/api/stream/{session_id}", handle_api_stream)
     app.router.add_get("/api/report/{session_id}", handle_api_report)
     app.router.add_get("/api/download/{session_id}/{kind}", handle_api_download)
     app.router.add_get("/favicon.ico", lambda r: web.Response(status=204))
@@ -447,7 +413,7 @@ HTML_PAGE = r"""<!DOCTYPE html>
 <div class="status-bar" id="statusBar"><div class="spinner"></div><span id="statusText">Agent 研究中...</span></div>
 <div class="input-area">
 <div class="input-row">
-<input id="query" placeholder="输入问题..." value="Transformer注意力机制最新进展" onkeydown="if(event.key==='Enter')send()">
+<input id="query" placeholder="输入你想研究的问题..." onkeydown="if(event.key==='Enter')send()">
 <select id="modeSel"><option value="auto">自动</option><option value="chat">对话</option><option value="deep">深度研究</option></select>
 <button id="btn" onclick="send()">发送</button>
 </div></div>
@@ -482,52 +448,40 @@ function startPolling(sid){
   const bar=document.getElementById('statusBar');
   bar.classList.add('show');
   const phases={planning:'正在规划任务...',searching:'正在搜索资料...',writing:'正在撰写报告...',completed:'完成!'};
+  let shownMsgs=0;
 
-  // SSE 实时流, 失败时回退轮询
-  const es=new EventSource('/api/stream/'+sid);
-  es.onmessage=function(e){
-    try{
-      const d=JSON.parse(e.data);
-      if(d.phase==='completed'){
-        es.close();
-        fetchReport(sid);
-      }else if(d.phase==='failed'){
-        es.close();isPolling=false;bar.classList.remove('show');
-        document.getElementById('btn').disabled=false;document.getElementById('btn').textContent='发送';
-        addMessage('agent','研究失败: '+(d.message||''));
-      }else{
-        document.getElementById('statusText').textContent=phases[d.phase]||d.message||d.phase;
-      }
-    }catch(ex){}
-  };
-  es.onerror=function(){es.close();pollFallback(sid);};
-
-  function fetchReport(sid){
+  // 高频轮询 (每500ms), 显示实时进度
+  const interval=setInterval(()=>{
     fetch('/api/report/'+sid).then(r=>r.json()).then(data=>{
-      isPolling=false;bar.classList.remove('show');
-      document.getElementById('btn').disabled=false;document.getElementById('btn').textContent='发送';
-      let html='深度研究完成!\n\n'+(data.final_answer||'');
-      let dl='<div style="margin-top:12px">';
-      dl+='<a class="dl-btn" href="'+data.download_url_final+'" download>下载 final_answer.md</a> ';
-      dl+='<a class="dl-btn" href="'+data.download_url_debug+'" download>下载 debug_report.md</a></div>';
-      addMessage('agent',html,null,dl);
-      setTimeout(()=>{
-        let a=document.createElement('a');a.href=data.download_url_final;a.download='final_answer.md';a.click();
-      },500);
+      // 显示新进度消息
+      const msgs=data.progress_messages||[];
+      while(shownMsgs<msgs.length){
+        const m=msgs[shownMsgs];
+        document.getElementById('statusText').textContent=phases[m.phase]||m.message||m.phase;
+        shownMsgs++;
+      }
+      if(data.status==='completed'){
+        clearInterval(interval);isPolling=false;
+        bar.classList.remove('show');
+        document.getElementById('btn').disabled=false;
+        document.getElementById('btn').textContent='发送';
+        let html='深度研究完成!\n\n'+(data.final_answer||'');
+        let dl='<div style="margin-top:12px">';
+        dl+='<a class="dl-btn" href="'+data.download_url_final+'" download>下载 final_answer.md</a> ';
+        dl+='<a class="dl-btn" href="'+data.download_url_debug+'" download>下载 debug_report.md</a></div>';
+        addMessage('agent',html,null,dl);
+        setTimeout(()=>{
+          let a=document.createElement('a');a.href=data.download_url_final;a.download='final_answer.md';a.click();
+        },500);
+      }else if(data.status==='failed'){
+        clearInterval(interval);isPolling=false;
+        bar.classList.remove('show');
+        document.getElementById('btn').disabled=false;
+        document.getElementById('btn').textContent='发送';
+        addMessage('agent','研究失败: '+(data.error||''));
+      }
     });
-  }
-
-  function pollFallback(sid){
-    const interval=setInterval(()=>{
-      fetch('/api/report/'+sid).then(r=>r.json()).then(data=>{
-        if(data.phase)document.getElementById('statusText').textContent=phases[data.phase]||data.phase;
-        if(data.status==='completed'){clearInterval(interval);fetchReport(sid);}
-        else if(data.status==='failed'){clearInterval(interval);isPolling=false;bar.classList.remove('show');
-          document.getElementById('btn').disabled=false;document.getElementById('btn').textContent='发送';
-          addMessage('agent','研究失败: '+(data.error||''));}
-      });
-    },1000);
-  }
+  },500);
 }
 
 function addMessage(role,text,process,downloadHtml){
