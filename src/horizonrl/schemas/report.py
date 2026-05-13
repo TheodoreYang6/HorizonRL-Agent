@@ -19,7 +19,35 @@
 
 from __future__ import annotations
 
+import time as _time
 from dataclasses import dataclass, field
+
+
+# ╔══════════════════════════════════════════════════════════════════════════════╗
+# ║  ReportMetadata — 报告元数据                                                  ║
+# ╚══════════════════════════════════════════════════════════════════════════════╝
+
+
+@dataclass
+class ReportMetadata:
+    """报告的生成元数据 —— 解决\"年份写成2023、作者是占位符\"问题。
+
+    Attributes:
+        session_id: 会话 ID
+        generated_at: 生成时间戳
+        author: 作者标识
+        mode: "user" | "debug"
+        used_mock_data: 是否使用了模拟数据
+        llm_writer_used: Writer 是否使用了 LLM
+    """
+
+    session_id: str = ""
+    generated_at: float = field(default_factory=_time.time)
+    author: str = "HorizonRL-Agent"
+    mode: str = "user"
+    used_mock_data: bool = False
+    llm_writer_used: bool = False
+
 
 # ╔══════════════════════════════════════════════════════════════════════════════╗
 # ║  CitationMap — 引用映射                                                      ║
@@ -111,6 +139,7 @@ class FinalReport:
     total_claims: int = 0
     generation_time: float = 0.0
     failed_sections: list[str] = field(default_factory=list)
+    metadata: ReportMetadata | None = None
 
     @property
     def citation_support_rate(self) -> float:

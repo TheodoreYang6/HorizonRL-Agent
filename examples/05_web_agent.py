@@ -34,7 +34,7 @@ from horizonrl.agent.planner import Planner, LLMPlanner
 from horizonrl.agent.worker import AgentWorker
 from horizonrl.agent.verifier import Verifier
 from horizonrl.agent.replanner import Replanner
-from horizonrl.agent.writer import Writer
+from horizonrl.agent.writer import Writer, WriterConfig
 from horizonrl.tools.manager import ToolManager
 from horizonrl.memory.hierarchical_memory import HierarchicalMemory
 from horizonrl.logging.trajectory_logger import TrajectoryLogger

@@ -163,15 +163,20 @@ class AgentWorker:
         now = time.time()
 
         if tool_name == "web_search":
-            # 尝试解析 JSON 列表格式
             parsed = self._try_parse_json(output)
+            is_mock = "[Mock]" in output or "mock-search" in output
             if isinstance(parsed, list):
                 for entry in parsed:
                     if isinstance(entry, dict):
+                        title = entry.get("title", "")
+                        snippet = entry.get("snippet", entry.get("body", str(entry)))
+                        url = entry.get("url", entry.get("href", ""))
                         items.append(EvidenceItem(
-                            content=entry.get("snippet", entry.get("body", str(entry))),
-                            source=entry.get("url", entry.get("href", "")),
+                            content=f"{title}: {snippet}" if title else snippet,
+                            source=url,
                             source_type="web",
+                            provider="web_search",
+                            is_mock=is_mock or "mock" in url.lower(),
                             retrieved_at=now,
                         ))
             else:
@@ -179,6 +184,8 @@ class AgentWorker:
                     content=output[:2000],
                     source="web_search",
                     source_type="web",
+                    provider="web_search",
+                    is_mock=is_mock,
                     retrieved_at=now,
                 ))
 

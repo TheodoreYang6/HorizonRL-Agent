@@ -20,12 +20,14 @@ from horizonrl.schemas.event import (
 from horizonrl.schemas.report import (
     CitationMap,
     FinalReport,
+    ReportMetadata,
     ReportSection,
 )
 from horizonrl.schemas.result import (
     ActionResult,
     ErrorType,
     EvidenceItem,
+    SearchProvenance,
     StepResult,
     ToolCall,
     VerificationResult,
@@ -55,6 +57,7 @@ __all__ = [
     "ErrorType",
     "ToolCall",
     "EvidenceItem",
+    "SearchProvenance",
     "StepResult",
     "VerificationResult",
     "ActionResult",
@@ -65,5 +68,6 @@ __all__ = [
     # report
     "CitationMap",
     "ReportSection",
+    "ReportMetadata",
     "FinalReport",
 ]

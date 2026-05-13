@@ -1,27 +1,31 @@
 """
-Writer — 研究报告合成器。
+Writer — 研究报告合成器 (v2: 用户模式 + 开发者模式分离)。
 
-将 Worker 产出的证据、Verifier 的验证、Memory 的摘要合成为
-结构化的自然语言研究报告。这是 HorizonRL-Agent 的输出层。
+v2 核心改进:
+    - UserAnswerWriter: 生成 final_answer.md（用户友好，无调试信息）
+    - DebugReportRenderer: 生成 debug_report.md（开发者视图）
+    - WriterConfig: 统一配置路由
+    - 修复 metadata: 不再出现 [您的姓名/代号] 或 2023 固定日期
+    - 证据引用带 provenance
 
-两种模式：
-    template — 确定性模板，按证据类型组织，无需 LLM（默认）
-    llm      — LLM 深度合成，流畅通顺，更像人类写的报告
-
-使用方式：
-    writer = Writer(mode="template")
-    report = writer.synthesize(query, plan, results, memory_context)
-
-    # LLM 模式
+使用方式:
+    # 用户模式（默认）
     writer = Writer(mode="llm", llm_client=client)
-    report = await writer.synthesize_async(query, plan, results, ctx)
+    final_md = await writer.write_final_answer(query, plan, results, ctx)
+
+    # 获取两份报告
+    final_md, debug_md = await writer.write_reports(...)
 """
 
 from __future__ import annotations
 
+import time
+from dataclasses import dataclass, field
+from pathlib import Path
 from typing import TYPE_CHECKING
 
-from horizonrl.schemas.result import StepResult, VerificationResult
+from horizonrl.schemas.report import ReportMetadata
+from horizonrl.schemas.result import StepResult, VerificationResult, EvidenceItem, SearchProvenance
 from horizonrl.schemas.task import PlanGraph
 
 if TYPE_CHECKING:
@@ -29,325 +33,482 @@ if TYPE_CHECKING:
     from horizonrl.memory.hierarchical_memory import MemoryContext
 
 
-class Writer:
-    """研究报告合成器 —— 证据 → 自然语言报告。
+# ─── 配置 ────────────────────────────────────────────────────────────────────
 
-    Examples:
-        >>> writer = Writer()
-        >>> report = writer.synthesize("Transformer 注意力机制", plan, results, ctx)
-        >>> print(report[:200])
-    """
 
-    def __init__(self, mode: str = "template", llm_client: LLMClient | None = None):
-        self.mode = mode
-        self.llm = llm_client
+@dataclass
+class WriterConfig:
+    """Writer 运行策略配置。"""
 
-    # ── 主编排 ──────────────────────────────────────────────────────────
+    enable_llm_writer: bool = True
+    default_author: str = "HorizonRL-Agent"
+    include_debug_stats: bool = False
+    export_dir: str = "summaries"
+    max_evidence_items: int = 10
 
-    def synthesize(
+
+# ─── 帮助函数 ────────────────────────────────────────────────────────────────
+
+
+def _mock_warning(evidence_items: list) -> str:
+    """检测 mock 数据并生成提示。兼容 EvidenceItem 对象和 dict。"""
+    if not evidence_items:
+        return ""
+    mock_count = sum(
+        1 for e in evidence_items
+        if (getattr(e, "is_mock", False) or (isinstance(e, dict) and e.get("is_mock", False)))
+    )
+    if mock_count > len(evidence_items) * 0.5:
+        return (
+            "> ⚠️ 当前为 Mock Demo 模式，大部分内容为流程演示数据，"
+            "非真实检索结果。配置 API Key 后可使用真实搜索。\n\n"
+        )
+    return ""
+
+
+def _evidence_ref_text(ev, index: int) -> str:
+    """生成单条证据的可读引用文本。兼容 EvidenceItem 和 dict。"""
+    def _get(key, default=""):
+        if isinstance(ev, dict):
+            return ev.get(key, default)
+        return getattr(ev, key, default)
+
+    provider = _get("provider") or _get("type", "unknown")
+    is_mock = _get("is_mock", False)
+    tag = "Mock" if is_mock else provider
+    query = _get("search_query") or _get("query", "")
+    source = _get("source", "")
+    content = _get("content", "")[:300]
+
+    lines = [f"[证据 {index} | provider={tag}]"]
+    if query:
+        lines.append(f"  query: {query}")
+    if source:
+        lines.append(f"  URL: {source}")
+    lines.append(f"  {content}")
+    return "\n".join(lines)
+
+
+# ╔══════════════════════════════════════════════════════════════════════════════╗
+# ║  DebugReportRenderer — 开发者调试报告                                        ║
+# ╚══════════════════════════════════════════════════════════════════════════════╝
+
+
+class DebugReportRenderer:
+    """生成 debug_report.md —— 保留完整执行过程供开发者分析。"""
+
+    def render(
         self,
         query: str,
-        plan: PlanGraph | None = None,
-        results: dict[str, StepResult] | None = None,
-        verifications: dict[str, VerificationResult] | None = None,
-        memory_ctx: MemoryContext | None = None,
-    ) -> str:
-        """合成研究报告（同步，模板模式）。
-
-        Args:
-            query: 用户的研究问题。
-            plan: 执行过的 PlanGraph（可选）。
-            results: {task_id: StepResult}（可选）。
-            verifications: {task_id: VerificationResult}（可选）。
-            memory_ctx: MemoryContext 摘要（可选）。
-
-        Returns:
-            完整的 Markdown 格式研究报告。
-        """
-        results = results or {}
-        verifications = verifications or {}
-
-        evidence = self._collect_evidence(results)
-        tasks = self._collect_tasks(plan, results, verifications)
-
-        return self._build_template_report(query, evidence, tasks, memory_ctx)
-
-    async def synthesize_async(
-        self,
-        query: str,
-        plan: PlanGraph | None = None,
-        results: dict[str, StepResult] | None = None,
-        verifications: dict[str, VerificationResult] | None = None,
-        memory_ctx: MemoryContext | None = None,
-    ) -> str:
-        """合成研究报告（异步，LLM 模式）。
-
-        若 LLM 不可用则自动回退到模板模式。
-        """
-        if self.mode == "llm" and self.llm is not None:
-            try:
-                return await self._llm_synthesize(
-                    query, plan, results, verifications, memory_ctx
-                )
-            except Exception:
-                pass  # 回退到模板
-
-        return self.synthesize(query, plan, results, verifications, memory_ctx)
-
-    # ── 证据收集 ────────────────────────────────────────────────────────
-
-    def _collect_evidence(
-        self, results: dict[str, StepResult]
-    ) -> list[dict]:
-        """从所有 StepResult 中收集并去重证据。"""
-        seen: set[str] = set()
-        items: list[dict] = []
-        for r in results.values():
-            for ev in r.evidence:
-                key = ev.content[:100]
-                if key not in seen:
-                    seen.add(key)
-                    items.append({
-                        "type": ev.source_type or "unknown",
-                        "source": ev.source or "",
-                        "content": ev.content,
-                    })
-        return items
-
-    def _collect_tasks(
-        self,
         plan: PlanGraph | None,
         results: dict[str, StepResult],
         verifications: dict[str, VerificationResult],
-    ) -> list[dict]:
-        """收集任务执行信息。"""
-        tasks: list[dict] = []
+        memory_ctx: MemoryContext | None = None,
+        stats: dict | None = None,
+        metadata: ReportMetadata | None = None,
+    ) -> str:
+        tasks = self._collect_tasks(plan, results, verifications)
+        evidence = self._collect_evidence(results)
+        lines = []
+
+        lines.append(f"# [DEBUG] 执行报告: {query}")
+        lines.append("")
+        if metadata:
+            lines.append(f"Session: `{metadata.session_id}`")
+            lines.append(f"生成时间: {time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(metadata.generated_at))}")
+            lines.append(f"模式: {metadata.mode}")
+            lines.append(f"Mock数据: {'是' if metadata.used_mock_data else '否'}")
+            lines.append("")
+
+        # ── 执行概要 ──
+        lines.append("## 执行概要")
+        lines.append("")
+        success_count = sum(1 for t in tasks if t["passed"])
+        if stats:
+            lines.append(f"| 指标 | 数值 |")
+            lines.append(f"|------|------|")
+            lines.append(f"| 子任务 | {stats.get('total_count', len(tasks))} |")
+            lines.append(f"| 成功 | {success_count} |")
+            lines.append(f"| 轮次 | {stats.get('rounds', '?')} |")
+            lines.append(f"| 工具调用 | {stats.get('total_tool_calls', '?')} |")
+            lines.append(f"| 重规划 | {stats.get('total_replans', '?')} |")
+            lines.append(f"| 总耗时 | {stats.get('total_elapsed', '?')}s |")
+        lines.append("")
+
+        # ── 任务 DAG ──
+        lines.append("## 任务 DAG")
+        lines.append("")
+        for t in tasks:
+            icon = "✅" if t["passed"] else "❌"
+            lines.append(
+                f"- {icon} **{t['name']}** (id=`{t['task_id']}`) — "
+                f"工具:{t['tools']}, 评分:{t['score']:.1f}, "
+                f"{t['evidence_count']}证据, {t['elapsed']}s"
+            )
+            if t.get("feedback"):
+                lines.append(f"  - 诊断: {t['feedback']}")
+        lines.append("")
+
+        # ── 验证详情 ──
+        lines.append("## 验证详情")
+        lines.append("")
+        for t in tasks:
+            icon = "PASS" if t["passed"] else f"FAIL({t.get('error_type', 'unknown')})"
+            lines.append(f"- [{icon}] {t['name']}: score={t['score']:.2f}")
+        lines.append("")
+
+        # ── 证据列表 ──
+        lines.append(f"## 证据列表 ({len(evidence)} 条)")
+        lines.append("")
+        for i, ev in enumerate(evidence):
+            tag = "Mock" if ev.get("is_mock") else ev.get("type", "unknown")
+            lines.append(f"{i+1}. [{tag}] {ev.get('content', '')[:200]}")
+        lines.append("")
+
+        # ── 工具调用明细 ──
+        lines.append("## 工具调用")
+        lines.append("")
+        tool_stats: dict[str, int] = {}
+        for r in results.values():
+            for tc in r.tool_calls:
+                name = tc.tool_name
+                tool_stats[name] = tool_stats.get(name, 0) + 1
+        for name, count in sorted(tool_stats.items()):
+            lines.append(f"- {name}: {count} 次")
+        lines.append("")
+
+        # ── 记忆摘要 ──
+        if memory_ctx and memory_ctx.summaries:
+            lines.append("## 记忆摘要")
+            for s in memory_ctx.summaries:
+                lines.append(f"- {s}")
+            lines.append("")
+
+        lines.append("---")
+        lines.append("*Debug Report — HorizonRL-Agent v0.1.0*")
+        return "\n".join(lines)
+
+    def _collect_tasks(self, plan, results, verifications):
+        tasks = []
         if plan is None:
             return tasks
         for node in plan.nodes.values():
             r = results.get(node.spec.id)
             vr = verifications.get(node.id)
             tasks.append({
+                "task_id": node.spec.id,
                 "name": node.spec.name,
-                "status": node.status.value,
                 "tools": ", ".join(node.spec.tool_names) or "无",
-                "output": r.output[:300] if r else "",
-                "evidence_count": len(r.evidence) if r else 0,
+                "status": node.status.value,
                 "score": vr.score if vr else 0,
                 "passed": vr.pass_ if vr else False,
+                "evidence_count": len(r.evidence) if r else 0,
+                "elapsed": f"{r.elapsed:.1f}" if r else "0",
                 "feedback": vr.feedback if vr and not vr.pass_ else "",
+                "error_type": vr.error_type.value if vr else "",
             })
         return tasks
 
-    # ── 模板报告生成 ────────────────────────────────────────────────────
+    def _collect_evidence(self, results: dict[str, StepResult]) -> list[dict]:
+        seen = set()
+        items = []
+        for r in results.values():
+            for ev in r.evidence:
+                key = ev.content[:100]
+                if key not in seen:
+                    seen.add(key)
+                    items.append({
+                        "type": ev.source_type or ev.provider or "unknown",
+                        "content": ev.content,
+                        "is_mock": ev.is_mock,
+                    })
+        return items
 
-    def _build_template_report(
-        self,
-        query: str,
-        evidence: list[dict],
-        tasks: list[dict],
-        memory_ctx: MemoryContext | None = None,
-    ) -> str:
-        """用确定性模板生成自然语言报告。"""
-        lines: list[str] = []
 
-        # ── 标题与概述 ──
-        lines.append(f"# {query}")
-        lines.append("")
+# ╔══════════════════════════════════════════════════════════════════════════════╗
+# ║  UserAnswerWriter — 用户友好答案                                             ║
+# ╚══════════════════════════════════════════════════════════════════════════════╝
 
-        success_count = sum(1 for t in tasks if t["passed"])
-        total = len(tasks)
-        lines.append(
-            f"本研究通过多 Agent 协作完成，共执行 {total} 个子任务，"
-            f"其中 {success_count} 个通过验证，"
-            f"收集到 {len(evidence)} 条证据。"
-        )
-        lines.append("")
 
-        # ── 证据分组 ──
-        web_evidence = [e for e in evidence if e["type"] == "web"]
-        arxiv_evidence = [e for e in evidence if e["type"] == "arxiv"]
-        code_evidence = [e for e in evidence if e["type"] == "code_output"]
-        other_evidence = [e for e in evidence if e["type"] not in ("web", "arxiv", "code_output")]
+class UserAnswerWriter:
+    """生成 final_answer.md —— 面向最终用户的自然语言答案。
 
-        # ── 背景与概述 ──
-        lines.append("## 一、研究概述")
-        lines.append("")
+    严格禁止输出: task_id、工具 JSON dump、Token 数、耗时、StepResult dump
+    """
 
-        # 从任务名称推断研究阶段
-        task_names = [t["name"] for t in tasks]
-        phases = []
-        if any("背景" in n for n in task_names):
-            phases.append("背景调研")
-        if any("进展" in n or "最新" in n for n in task_names):
-            phases.append("前沿追踪")
-        if any("对比" in n or "分析" in n for n in task_names):
-            phases.append("方法分析")
-        if any("局限" in n for n in task_names):
-            phases.append("局限性评估")
-        if any("汇总" in n or "综合" in n for n in task_names):
-            phases.append("综合总结")
+    def __init__(self, config: WriterConfig | None = None, llm_client: LLMClient | None = None):
+        self.config = config or WriterConfig()
+        self.llm = llm_client
 
-        if phases:
-            lines.append(f"研究按以下阶段展开：{' → '.join(phases)}。")
-        lines.append("")
-
-        # ── 网络搜索发现 ──
-        if web_evidence:
-            lines.append("## 二、网络调研发现")
-            lines.append("")
-            for i, ev in enumerate(web_evidence[:8]):
-                content = ev["content"].strip()
-                # 让内容读起来更自然
-                if content:
-                    lines.append(f"{content}")
-                    lines.append("")
-            if len(web_evidence) > 8:
-                lines.append(f"*...以及其他 {len(web_evidence) - 8} 条网络搜索结果*")
-                lines.append("")
-
-        # ── 学术论文发现 ──
-        if arxiv_evidence:
-            lines.append("## 三、学术论文调研")
-            lines.append("")
-            for i, ev in enumerate(arxiv_evidence[:5]):
-                content = ev["content"].strip()
-                if content:
-                    lines.append(f"{content}")
-                    lines.append("")
-            if len(arxiv_evidence) > 5:
-                lines.append(f"*...以及其他 {len(arxiv_evidence) - 5} 篇相关论文*")
-                lines.append("")
-
-        # ── 代码实验 ──
-        if code_evidence:
-            lines.append("## 四、代码实验结果")
-            lines.append("")
-            for i, ev in enumerate(code_evidence[:5]):
-                content = ev["content"].strip()
-                if content:
-                    lines.append(f"- {content}")
-            lines.append("")
-
-        # ── 其他来源 ──
-        if other_evidence:
-            lines.append("## 五、补充发现")
-            lines.append("")
-            for ev in other_evidence[:5]:
-                content = ev["content"].strip()
-                if content:
-                    lines.append(f"- {content}")
-            lines.append("")
-
-        # ── 执行质量评估 ──
-        if tasks:
-            lines.append("## 六、执行质量")
-            lines.append("")
-            avg_score = sum(t["score"] for t in tasks) / max(len(tasks), 1)
-            lines.append(f"各子任务验证平均得分: {avg_score:.2f}。")
-            lines.append("")
-
-            failed_tasks = [t for t in tasks if not t["passed"]]
-            if failed_tasks:
-                lines.append("以下子任务未通过验证：")
-                for t in failed_tasks:
-                    lines.append(f"- **{t['name']}**: {t['feedback']}")
-                lines.append("")
-
-        # ── 记忆摘要 ──
-        if memory_ctx and memory_ctx.summaries:
-            lines.append("## 七、研究总结")
-            lines.append("")
-            for s in memory_ctx.summaries:
-                lines.append(f"> {s}")
-                lines.append("")
-
-        # ── 证据来源统计 ──
-        lines.append("## 八、证据来源")
-        lines.append("")
-        web_count = len(web_evidence)
-        arxiv_count = len(arxiv_evidence)
-        code_count = len(code_evidence)
-        other_count = len(other_evidence)
-        lines.append("| 来源 | 数量 |")
-        lines.append("|------|------|")
-        if web_count:
-            lines.append(f"| 网络搜索 | {web_count} |")
-        if arxiv_count:
-            lines.append(f"| 学术论文 | {arxiv_count} |")
-        if code_count:
-            lines.append(f"| 代码执行 | {code_count} |")
-        if other_count:
-            lines.append(f"| 其他 | {other_count} |")
-        lines.append(f"| **总计** | **{len(evidence)}** |")
-        lines.append("")
-
-        lines.append("---")
-        lines.append("*本报告由 HorizonRL-Agent v0.1.0 自动生成*")
-
-        return "\n".join(lines)
-
-    # ── LLM 报告生成 ────────────────────────────────────────────────────
-
-    async def _llm_synthesize(
+    async def write(
         self,
         query: str,
         plan: PlanGraph | None,
-        results: dict[str, StepResult] | None,
-        verifications: dict[str, VerificationResult] | None,
+        results: dict[str, StepResult],
+        verifications: dict[str, VerificationResult] | None = None,
         memory_ctx: MemoryContext | None = None,
+        metadata: ReportMetadata | None = None,
     ) -> str:
-        """LLM 驱动的深度研究报告合成。"""
-        results = results or {}
+        """生成 final_answer，LLM 可用时走 LLM，否则模板 fallback。"""
         verifications = verifications or {}
-
         evidence = self._collect_evidence(results)
+
+        # LLM 路径
+        if self.config.enable_llm_writer and self.llm is not None:
+            try:
+                return await self._llm_write(query, evidence, metadata)
+            except Exception:
+                pass
+
+        # 模板 fallback
+        return self._template_write(query, evidence, metadata)
+
+    async def _llm_write(self, query: str, evidence: list[dict], metadata=None) -> str:
         evidence_text = ""
-        for i, ev in enumerate(evidence[:12]):
-            evidence_text += f"[{ev['type']}] {ev['content'][:300]}\n\n"
+        for i, ev in enumerate(evidence[:self.config.max_evidence_items]):
+            tag = "Mock" if ev.get("is_mock") else ev.get("type", "web")
+            evidence_text += f"[{tag}] {ev.get('content', '')[:300]}\n\n"
 
-        tasks = self._collect_tasks(plan, results, verifications)
-        tasks_text = ""
-        for t in tasks:
-            status = "通过" if t["passed"] else f"未通过({t['feedback']})"
-            tasks_text += f"- {t['name']}: {status}, 评分{t['score']:.1f}\n"
+        mock_note = _mock_warning(evidence)
 
-        total_tasks = len(tasks)
-        passed_tasks = sum(1 for t in tasks if t["passed"])
+        prompt = f"""你是一位科技研究分析师。请根据以下检索到的证据，用流畅的中文回答用户的问题。
 
-        prompt = f"""你是一位资深研究分析师。请根据以下执行过程和收集到的证据，撰写一份专业的研究报告。
-
-## 研究问题
+## 用户问题
 {query}
 
-## 执行过程
-{total_tasks} 个子任务并行执行，{passed_tasks} 个通过验证。
+## 检索到的证据
+{evidence_text if evidence_text else '(未找到相关证据)'}
 
-{tasks_text}
+请按以下结构撰写答案：
+1. **核心结论** — 2-3句话直接回答
+2. **详细解释** — 结合证据展开说明
+3. **关键要点** — 3-5个要点总结
+4. **局限与说明** — 如证据不足或信息不确定，诚实说明
 
-## 收集到的证据
-{evidence_text if evidence_text else '(无证据)'}
+要求：
+- 使用自然、友好、专业的中文
+- 不要使用 task_id、Token、耗时等内部调试信息
+- 如果证据显示是模拟数据，不要假装是真实信息
+- 如果有引用证据，在段落中用 [来源] 标记
 
-请撰写一份结构清晰的中文研究报告（Markdown 格式），要求：
-1. **研究摘要** — 2-3句话概括核心发现
-2. **背景** — 问题的背景和意义
-3. **核心发现** — 按主题组织，融入具体证据
-4. **方法分析** — 如果有不同方法，做对比
-5. **当前局限** — 目前方法的不足之处
-6. **结论与展望** — 总结和未来方向
-7. **来源说明** — 列出证据来源类型和数量
-
-报告要读起来像人类写的，不要像数据转储。使用流畅的中文。"""
+{mock_note}"""
 
         result = await self.llm.chat(
             prompt,
-            system_prompt="你是一位资深的科技研究分析师，擅长将碎片化证据合成为流畅的研究报告。",
+            system_prompt="你是一个友好、专业的科技研究助手。用流畅的中文回答用户问题。",
             temperature=0.4,
             max_tokens=2000,
         )
 
         if result.is_success and len(result.content) > 50:
             return result.content
+        return self._template_write(query, evidence, metadata)
+
+    def _template_write(self, query: str, evidence: list[dict], metadata=None) -> str:
+        lines = [mock_warning_str := _mock_warning(evidence)]
+        if mock_warning_str.strip():
+            lines.append("")
+
+        lines.append(f"# {query}")
+        lines.append("")
+
+        # ── 核心结论 ──
+        web_evidence = [e for e in evidence if e.get("type") == "web"]
+        arxiv_evidence = [e for e in evidence if e.get("type") == "arxiv"]
+        code_evidence = [e for e in evidence if e.get("type") == "code_output"]
+
+        total = len(evidence)
+        real_count = sum(1 for e in evidence if not e.get("is_mock", False))
+
+        lines.append("## 核心结论")
+        lines.append("")
+        if total == 0:
+            lines.append("未找到相关证据，建议调整搜索词或扩大搜索范围后重试。")
         else:
-            # LLM 失败，回退模板
-            return self._build_template_report(query, evidence, tasks, memory_ctx)
+            real_note = f"其中 {real_count} 条来自真实数据源" if real_count > 0 else ""
+            lines.append(
+                f"基于 {total} 条检索结果{real_note}，以下是对该问题的分析总结。"
+            )
+        lines.append("")
+
+        # ── 详细解释 ──
+        if web_evidence:
+            lines.append("## 网络检索发现")
+            lines.append("")
+            for ev in web_evidence[:5]:
+                content = ev.get("content", "").strip()
+                if content:
+                    lines.append(f"{content}")
+                    lines.append("")
+            if len(web_evidence) > 5:
+                lines.append(f"*...以及其他 {len(web_evidence) - 5} 条网络结果*")
+                lines.append("")
+
+        if arxiv_evidence:
+            lines.append("## 学术论文发现")
+            lines.append("")
+            for ev in arxiv_evidence[:3]:
+                content = ev.get("content", "").strip()
+                if content:
+                    lines.append(f"{content}")
+                    lines.append("")
+            if len(arxiv_evidence) > 3:
+                lines.append(f"*...以及其他 {len(arxiv_evidence) - 3} 篇论文*")
+                lines.append("")
+
+        if code_evidence:
+            lines.append("## 代码实验发现")
+            lines.append("")
+            for ev in code_evidence[:3]:
+                lines.append(f"- {ev.get('content', '')[:300]}")
+            lines.append("")
+
+        # ── 关键要点 ──
+        lines.append("## 关键要点")
+        lines.append("")
+        for i, ev in enumerate(evidence[:5]):
+            content = ev.get("content", "")[:150]
+            if content:
+                lines.append(f"{i+1}. {content}")
+        lines.append("")
+
+        # ── 参考证据 ──
+        if evidence:
+            lines.append("## 参考证据")
+            lines.append("")
+            for i, ev in enumerate(evidence[:self.config.max_evidence_items]):
+                lines.append(_evidence_ref_text(ev, i + 1))
+                lines.append("")
+
+        if metadata:
+            lines.append("---")
+            lines.append(f"*本答案由 HorizonRL-Agent 自动生成*")
+        return "\n".join(lines)
+
+    def _collect_evidence(self, results: dict[str, StepResult]) -> list[dict]:
+        seen = set()
+        items = []
+        for r in results.values():
+            for ev in r.evidence:
+                key = ev.content[:100]
+                if key not in seen:
+                    seen.add(key)
+                    items.append({
+                        "type": ev.source_type or ev.provider or "unknown",
+                        "content": ev.content,
+                        "source": ev.source or "",
+                        "provider": ev.provider or ev.source_type or "",
+                        "search_query": ev.search_query or "",
+                        "is_mock": ev.is_mock,
+                        "score": ev.relevance_score,
+                    })
+        return items
+
+
+# ╔══════════════════════════════════════════════════════════════════════════════╗
+# ║  Writer 主编排                                                               ║
+# ╚══════════════════════════════════════════════════════════════════════════════╝
+
+
+class Writer:
+    """研究报告合成器 —— 证据 → 自然语言报告。
+
+    v2: UserAnswerWriter + DebugReportRenderer 双模式。
+    """
+
+    def __init__(self, mode: str = "template", llm_client: LLMClient | None = None,
+                 config: WriterConfig | None = None):
+        self.mode = mode
+        self.llm = llm_client
+        self.config = config or WriterConfig(enable_llm_writer=(mode == "llm"))
+        self._debug = DebugReportRenderer()
+        self._user = UserAnswerWriter(self.config, llm_client)
+
+    # ── 主编排 ──────────────────────────────────────────────────────────
+
+    def synthesize(
+        self, query: str, plan: PlanGraph | None = None,
+        results: dict[str, StepResult] | None = None,
+        verifications: dict[str, VerificationResult] | None = None,
+        memory_ctx: MemoryContext | None = None,
+    ) -> str:
+        """同步合成（模板模式）。"""
+        return self._user._template_write(
+            query,
+            self._user._collect_evidence(results or {}),
+        )
+
+    async def synthesize_async(
+        self, query: str, plan: PlanGraph | None = None,
+        results: dict[str, StepResult] | None = None,
+        verifications: dict[str, VerificationResult] | None = None,
+        memory_ctx: MemoryContext | None = None,
+    ) -> str:
+        """异步合成。LLM 模式时调用 LLM，否则模板。"""
+        results = results or {}
+        verifications = verifications or {}
+        evidence = self._user._collect_evidence(results)
+        mock_count = sum(1 for e in evidence if e.get("is_mock"))
+
+        meta = ReportMetadata(
+            author=self.config.default_author,
+            mode="user",
+            used_mock_data=(mock_count > len(evidence) * 0.5),
+            llm_writer_used=(self.mode == "llm" and self.llm is not None),
+        )
+
+        if self.mode == "llm" and self.llm is not None:
+            return await self._user.write(query, plan, results, verifications, memory_ctx, meta)
+        return self._user._template_write(query, evidence, meta)
+
+    async def write_reports(
+        self, query: str, session_id: str,
+        plan: PlanGraph | None = None,
+        results: dict[str, StepResult] | None = None,
+        verifications: dict[str, VerificationResult] | None = None,
+        memory_ctx: MemoryContext | None = None,
+        stats: dict | None = None,
+    ) -> tuple[str, str]:
+        """生成并保存 final_answer.md 和 debug_report.md。
+
+        Returns:
+            (final_answer_path, debug_report_path)
+        """
+        results = results or {}
+        verifications = verifications or {}
+        evidence = self._user._collect_evidence(results)
+        mock_count = sum(1 for e in evidence if e.get("is_mock"))
+
+        meta = ReportMetadata(
+            session_id=session_id,
+            author=self.config.default_author,
+            mode="user",
+            used_mock_data=(mock_count > len(evidence) * 0.5),
+            llm_writer_used=(self.mode == "llm" and self.llm is not None),
+        )
+
+        # 生成两份报告
+        final_md = await self._user.write(query, plan, results, verifications, memory_ctx, meta)
+        debug_md = self._debug.render(query, plan, results, verifications, memory_ctx, stats, meta)
+
+        # 保存文件
+        export_dir = Path(self.config.export_dir) / session_id
+        export_dir.mkdir(parents=True, exist_ok=True)
+
+        final_path = export_dir / "final_answer.md"
+        debug_path = export_dir / "debug_report.md"
+
+        final_path.write_text(final_md, encoding="utf-8")
+        debug_path.write_text(debug_md, encoding="utf-8")
+
+        return str(final_path), str(debug_path)
+
+    def render_debug_report(
+        self, query: str, plan: PlanGraph | None,
+        results: dict[str, StepResult],
+        verifications: dict[str, VerificationResult] | None = None,
+        memory_ctx: MemoryContext | None = None,
+        stats: dict | None = None,
+    ) -> str:
+        """同步生成 debug report。"""
+        return self._debug.render(query, plan, results, verifications or {}, memory_ctx, stats)

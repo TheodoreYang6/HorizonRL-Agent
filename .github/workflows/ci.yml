@@ -27,6 +27,10 @@ jobs:
           pip install -r requirements.txt
           pip install pytest pytest-asyncio pytest-cov
 
-      - name: Run tests
+      - name: Run tests (mock mode)
+        env:
+          HORIZON_SEARCH_PROVIDER: mock
+          HORIZON_OFFLINE_MODE: "true"
+          ENABLE_LLM_WRITER: "false"
         run: |
           python -m pytest tests/ -v --tb=short

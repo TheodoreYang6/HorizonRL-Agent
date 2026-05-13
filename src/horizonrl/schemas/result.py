@@ -98,6 +98,28 @@ class ToolCall:
 
 
 # ╔══════════════════════════════════════════════════════════════════════════════╗
+# ║  SearchProvenance — 搜索来源可追溯信息                                       ║
+# ╚══════════════════════════════════════════════════════════════════════════════╝
+
+
+@dataclass
+class SearchProvenance:
+    """搜索结果的来源追溯信息。
+
+    记录每次搜索的 provider、query、时间等元数据，
+    让最终答案中的每一条证据都可追溯到具体来源。
+    """
+
+    provider: str = ""         # bocha / brave / duckduckgo / arxiv / mock
+    query: str = ""            # 实际使用的搜索 query
+    timestamp: float = 0.0     # 抓取时间戳
+    raw_snippet: str = ""      # 原始返回片段
+    score: float = 0.0         # provider 返回的相关度评分
+    url: str = ""              # 结果 URL
+    is_mock: bool = False      # 是否为模拟数据
+
+
+# ╔══════════════════════════════════════════════════════════════════════════════╗
 # ║  EvidenceItem — 单条证据                                                    ║
 # ╚══════════════════════════════════════════════════════════════════════════════╝
 #
@@ -110,11 +132,15 @@ class EvidenceItem:
     """Worker 产出的单条证据。
 
     Attributes:
-        content: 证据内容（论文摘要、代码输出、数据片段）
-        source: 来源（URL, arxiv ID, 文件名）
+        content: 证据内容
+        source: 来源 URL
         source_type: 来源类型（"arxiv", "web", "code_output", "api"）
-        relevance_score: 相关度评分（0-1），由 Worker 或 Verifier 评估
+        relevance_score: 相关度评分（0-1）
         retrieved_at: 获取时间戳
+        provider: 搜索提供商
+        search_query: 实际搜索 query
+        is_mock: 是否为模拟数据
+        provenance: 完整来源追溯（可选）
     """
 
     content: str
@@ -122,12 +148,35 @@ class EvidenceItem:
     source_type: str = ""
     relevance_score: float = 0.0
     retrieved_at: float = 0.0
+    provider: str = ""
+    search_query: str = ""
+    is_mock: bool = False
+    provenance: SearchProvenance | None = None
 
     def __repr__(self) -> str:
+        mock_tag = " [MOCK]" if self.is_mock else ""
         return (
             f"EvidenceItem(source={self.source[:40]}..., "
-            f"relevance={self.relevance_score:.2f})"
+            f"relevance={self.relevance_score:.2f}{mock_tag})"
         )
+
+    def provenance_text(self) -> str:
+        """生成可读的来源追溯文本。"""
+        if self.provenance:
+            p = self.provenance
+            provider = p.provider or self.provider or "unknown"
+            tag = "Mock" if (p.is_mock or self.is_mock) else provider
+            ts_str = ""
+            if p.timestamp:
+                import datetime
+                ts_str = datetime.datetime.fromtimestamp(p.timestamp).strftime("%Y-%m-%d %H:%M")
+            return (
+                f"[{'Mock' if (p.is_mock or self.is_mock) else provider}"
+                f"{' | ' + ts_str if ts_str else ''}]"
+            )
+        if self.is_mock:
+            return "[Mock]"
+        return f"[{self.provider or self.source_type or 'unknown'}]"
 
 
 # ╔══════════════════════════════════════════════════════════════════════════════╗
