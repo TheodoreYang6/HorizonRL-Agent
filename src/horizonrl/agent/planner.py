@@ -1,0 +1,368 @@
+"""
+Planner —— 任务分解模块。
+
+将用户自然语言任务拆解为结构化的 TaskSpec 列表和 PlanGraph DAG。
+MVP 阶段使用模板分解，Phase 2+ 接入 LLM 做语义分解。
+
+输入：UserTask
+输出：PlanGraph（含 TaskSpec[] + 依赖边）
+"""
+
+from __future__ import annotations
+
+import time
+import uuid
+from typing import TYPE_CHECKING
+
+from horizonrl.schemas.task import (
+    TaskPriority,
+    TaskSpec,
+    PlanNode,
+    PlanGraph,
+    UserTask,
+)
+
+if TYPE_CHECKING:
+    from horizonrl.config.settings import RootConfig
+
+
+def _short_id() -> str:
+    """生成短 ID：task_ + UUID 前 8 位。"""
+    return f"task_{uuid.uuid4().hex[:8]}"
+
+
+# ─── 任务分解模板 ─────────────────────────────────────────────────────────
+# MVP 阶段使用静态模板。每个模板定义一组 TaskSpec，包含依赖关系。
+# Phase 2+ 会替换为 LLM 驱动的动态分解。
+
+
+_RESEARCH_TEMPLATE: list[dict] = [
+    {
+        "name": "检索背景信息",
+        "description": "搜索 '{topic}' 的基础概念、定义、历史背景",
+        "tool_names": ["web_search"],
+        "depends_on": [],
+        "priority": TaskPriority.P0,
+    },
+    {
+        "name": "检索最新进展",
+        "description": "搜索 '{topic}' 在近两年的最新研究和方法",
+        "tool_names": ["web_search", "arxiv_search"],
+        "depends_on": [],
+        "priority": TaskPriority.P0,
+    },
+    {
+        "name": "分析对比方法",
+        "description": "搜索并对比 '{topic}' 中不同方法的优劣",
+        "tool_names": ["web_search"],
+        "depends_on": [],  # 动态填充
+        "priority": TaskPriority.P1,
+    },
+    {
+        "name": "检索局限性",
+        "description": "搜索 '{topic}' 当前方法的局限和挑战",
+        "tool_names": ["web_search"],
+        "depends_on": [],
+        "priority": TaskPriority.P1,
+    },
+    {
+        "name": "综合汇总",
+        "description": "搜索 '{topic}' 的未来展望，将所有发现综合为结构化摘要",
+        "tool_names": ["web_search"],
+        "depends_on": [],  # 动态填充
+        "priority": TaskPriority.P2,
+    },
+]
+
+_CODE_TEMPLATE: list[dict] = [
+    {
+        "name": "理解代码结构",
+        "description": "阅读项目中的 '{topic}' 相关代码，理解逻辑和依赖",
+        "tool_names": ["code_execution"],
+        "depends_on": [],
+        "priority": TaskPriority.P0,
+    },
+    {
+        "name": "定位问题",
+        "description": "根据 '{topic}' 描述定位具体的 bug 或问题位置",
+        "tool_names": ["web_search"],
+        "depends_on": [],
+        "priority": TaskPriority.P0,
+    },
+    {
+        "name": "运行现有代码",
+        "description": "运行 '{topic}' 相关代码，记录错误信息",
+        "tool_names": ["code_execution"],
+        "depends_on": [],
+        "priority": TaskPriority.P1,
+    },
+    {
+        "name": "修复代码",
+        "description": "根据错误信息和搜索结果修复代码",
+        "tool_names": ["code_execution"],
+        "depends_on": [],  # 动态填充
+        "priority": TaskPriority.P1,
+    },
+    {
+        "name": "验证修复",
+        "description": "运行修复后的代码，确认问题已解决",
+        "tool_names": ["code_execution"],
+        "depends_on": [],  # 动态填充
+        "priority": TaskPriority.P2,
+    },
+]
+
+
+class Planner:
+    """任务分解器 —— 将 UserTask 拆解为可执行的 PlanGraph。
+
+    MVP 阶段使用模板匹配做任务分解（无需 LLM）。
+    Phase 2+ 接入 LLM 做语义分解和动态工具选择。
+
+    Examples:
+        >>> planner = Planner()
+        >>> task = UserTask(description="调研 Transformer 注意力机制")
+        >>> plan = planner.plan(task)
+        >>> len(plan.nodes) >= 3
+        True
+        >>> plan.root_ids  # 第一批可并行执行的任务
+        [...]
+    """
+
+    def __init__(self, config: RootConfig | None = None):
+        self.config = config
+        self._templates = {
+            "research": _RESEARCH_TEMPLATE,
+            "code": _CODE_TEMPLATE,
+        }
+
+    def plan(self, task: UserTask) -> PlanGraph:
+        """将用户任务分解为 PlanGraph。
+
+        根据任务类型选择模板，生成 TaskSpec 列表，构建 DAG。
+
+        Args:
+            task: 用户输入的原始任务。
+
+        Returns:
+            完整的 PlanGraph，包含节点、依赖边、根节点列表。
+        """
+        # 判断任务类型
+        task_type = self._classify_task(task)
+        template = self._templates.get(task_type, _RESEARCH_TEMPLATE)
+
+        # 生成所有 TaskSpec
+        specs: list[TaskSpec] = []
+        spec_ids: list[str] = []
+        for tmpl in template:
+            spec = TaskSpec(
+                id=_short_id(),
+                name=tmpl["name"],
+                description=tmpl["description"].format(topic=task.description),
+                tool_names=list(tmpl["tool_names"]),
+                depends_on=[],  # 稍后填充
+                priority=tmpl.get("priority", TaskPriority.P1),
+            )
+            specs.append(spec)
+            spec_ids.append(spec.id)
+
+        # 建立依赖关系（模板中的 depends_on 用索引引用前序任务）
+        for i, tmpl in enumerate(template):
+            deps = []
+            for dep_idx in tmpl["depends_on"]:
+                if 0 <= dep_idx < len(spec_ids):
+                    deps.append(spec_ids[dep_idx])
+            specs[i].depends_on = deps
+
+        # 根据模板类型设置具体依赖
+        if task_type == "research":
+            # 分析对比 → 依赖 检索背景 + 最新进展
+            specs[2].depends_on = [spec_ids[0], spec_ids[1]]
+            # 综合汇总 → 依赖 分析对比 + 检索局限性
+            specs[4].depends_on = [spec_ids[2], spec_ids[3]]
+        elif task_type == "code":
+            # 修复代码 → 依赖 运行代码 + 定位问题
+            specs[3].depends_on = [spec_ids[1], spec_ids[2]]
+            # 验证修复 → 依赖 修复代码
+            specs[4].depends_on = [spec_ids[3]]
+
+        # 构建 PlanGraph
+        nodes: dict[str, PlanNode] = {}
+        edges: dict[str, list[str]] = {}
+        root_ids: list[str] = []
+
+        for spec in specs:
+            node = PlanNode(spec=spec)
+            nodes[spec.id] = node
+            edges[spec.id] = list(spec.depends_on)
+            if not spec.depends_on:
+                root_ids.append(spec.id)
+
+        plan = PlanGraph(
+            nodes=nodes,
+            edges=edges,
+            root_ids=root_ids,
+            total_tokens_spent=0,
+            created_at=time.time(),
+        )
+
+        return plan
+
+    def _classify_task(self, task: UserTask) -> str:
+        """根据任务描述和 required_tools 判断任务类型。"""
+        if "code_execution" in task.required_tools:
+            return "code"
+        desc_lower = task.description.lower()
+        code_keywords = ("代码", "修复", "bug", "debug", "编程", "函数", "测试")
+        if any(kw in desc_lower for kw in code_keywords):
+            return "code"
+        return "research"
+
+
+class LLMPlanner:
+    """LLM 驱动的任务分解器 —— 用大模型将 UserTask 拆解为 PlanGraph。
+
+    相比模板 Planner，LLMPlanner 能理解任意任务类型，动态选择工具，
+    生成更合理的依赖关系和优先级。
+
+    Examples:
+        >>> from horizonrl.llm import LLMClient
+        >>> client = LLMClient(config.llm)
+        >>> planner = LLMPlanner(client)
+        >>> plan = await planner.plan(UserTask(description="调研 LLaMA 架构"))
+        >>> print(plan.total_count(), "个子任务")
+    """
+
+    def __init__(self, llm_client, config=None):
+        self.llm = llm_client
+        self.config = config
+
+    async def plan(self, task: UserTask) -> PlanGraph:
+        """用 LLM 将用户任务分解为 PlanGraph。
+
+        Args:
+            task: 用户输入的原始任务。
+
+        Returns:
+            完整的 PlanGraph，包含节点、依赖边、根节点列表。
+        """
+        prompt = self._build_prompt(task)
+        result = await self.llm.chat(prompt, system_prompt=self._system_prompt())
+
+        if not result.is_success:
+            # LLM 调用失败，回退到模板 Planner
+            fallback = Planner(self.config)
+            return fallback.plan(task)
+
+        specs = self._parse_response(result.content, task)
+        return self._build_graph(specs)
+
+    def _system_prompt(self) -> str:
+        return (
+            "你是一个任务规划专家。你的职责是将用户的研究问题或编程任务"
+            "拆解为 4-7 个结构化的子任务。每个子任务需要指定：名称、描述、"
+            "需要的工具、依赖关系、优先级。你只输出 JSON，不输出其他内容。"
+        )
+
+    def _build_prompt(self, task: UserTask) -> str:
+        tools_hint = ""
+        if task.required_tools:
+            tools_hint = f"必须使用的工具: {', '.join(task.required_tools)}"
+        else:
+            tools_hint = "可选工具: web_search, arxiv_search, code_execution"
+
+        return f"""请将以下任务拆解为 4-7 个子任务。
+
+任务描述: {task.description}
+{tools_hint}
+最大步数限制: {task.max_steps}
+
+输出一个 JSON 数组，每个元素为:
+{{
+    "name": "子任务简短名称",
+    "description": "子任务详细描述，Worker 据此执行",
+    "tool_names": ["需要的工具名"],
+    "depends_on": [依赖的前置任务索引(从0开始), 无依赖则为空数组],
+    "priority": "p0|p1|p2"
+}}
+
+规则:
+1. depends_on 用数组索引（整数），表示这个任务依赖第几个前置任务完成
+2. p0=关键路径(必须先做), p1=正常, p2=可后置(如润色)
+3. 不要列出不存在的工具名
+4. 只输出 JSON 数组，不要输出其他解释
+
+JSON:"""
+
+    def _parse_response(self, content: str, task: UserTask) -> list[TaskSpec]:
+        """解析 LLM 返回的 JSON，生成 TaskSpec 列表。"""
+        import json
+        import re
+
+        # 提取 JSON 数组
+        match = re.search(r"\[.*\]", content, re.DOTALL)
+        if not match:
+            return []
+
+        try:
+            raw_items = json.loads(match.group(0))
+        except json.JSONDecodeError:
+            return []
+
+        # 先创建所有 TaskSpec（depends_on 稍后用索引填充）
+        specs: list[TaskSpec] = []
+        spec_ids: list[str] = []
+        for item in raw_items:
+            sid = _short_id()
+            priority = TaskPriority.P1
+            if isinstance(item.get("priority"), str):
+                pval = item["priority"].lower()
+                if pval in ("p0", "p1", "p2"):
+                    priority = TaskPriority(pval)
+
+            spec = TaskSpec(
+                id=sid,
+                name=str(item.get("name", f"子任务{len(specs)+1}")),
+                description=str(item.get("description", "")),
+                tool_names=[t for t in item.get("tool_names", [])
+                           if t in ("web_search", "arxiv_search", "code_execution")],
+                depends_on=[],  # 稍后填充
+                priority=priority,
+            )
+            specs.append(spec)
+            spec_ids.append(sid)
+
+        # 用 spec_ids 替换索引依赖
+        for i, item in enumerate(raw_items):
+            raw_deps = item.get("depends_on", [])
+            if isinstance(raw_deps, list):
+                deps = []
+                for d in raw_deps:
+                    if isinstance(d, int) and 0 <= d < len(spec_ids) and d != i:
+                        deps.append(spec_ids[d])
+                specs[i].depends_on = deps
+
+        return specs
+
+    def _build_graph(self, specs: list[TaskSpec]) -> PlanGraph:
+        """从 TaskSpec 列表构建 PlanGraph。"""
+        import time
+
+        nodes: dict[str, PlanNode] = {}
+        edges: dict[str, list[str]] = {}
+        root_ids: list[str] = []
+
+        for spec in specs:
+            node = PlanNode(spec=spec)
+            nodes[spec.id] = node
+            edges[spec.id] = list(spec.depends_on)
+            if not spec.depends_on:
+                root_ids.append(spec.id)
+
+        return PlanGraph(
+            nodes=nodes,
+            edges=edges,
+            root_ids=root_ids,
+            total_tokens_spent=0,
+            created_at=time.time(),
+        )

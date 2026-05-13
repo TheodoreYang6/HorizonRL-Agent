@@ -1,0 +1,35 @@
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# HorizonRL-Agent 开发环境配置
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# 继承自 default.yaml，覆盖开发调试相关的配置。
+# 使用方式：python scripts/run_demo.py --config configs/dev.yaml
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+debug: true
+log_level: DEBUG
+
+# 开发环境用 DeepSeek API (OpenAI 兼容端点)
+llm:
+  provider: openai
+  model: deepseek-chat
+  base_url: https://api.deepseek.com
+  temperature: 0.5
+
+# 开发时减少并发，方便调试
+agent:
+  max_steps: 15
+  worker_semaphore_limit: 2
+  llm_call_timeout: 45
+
+# 开发时日志输出到控制台
+logging:
+  log_to_console: true
+  output_dir: data/traces/dev
+  buffer_size: 1                # 每条立即写入
+
+# 开发时工具调用更快超时（快速失败）
+tools:
+  web_search:
+    timeout: 10
+  code_execution:
+    timeout: 15

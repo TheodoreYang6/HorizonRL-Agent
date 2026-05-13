@@ -1,0 +1,42 @@
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# HorizonRL-Agent 评测环境配置
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# 用于 Phase 4 消融实验和基准评测。
+# 使用方式：python scripts/run_eval.py --config configs/eval.yaml
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+debug: false
+log_level: WARNING
+
+# 评测用确定性温度
+llm:
+  temperature: 0.0
+
+lightweight_llm:
+  temperature: 0.0
+
+# 评测参数
+agent:
+  max_steps: 30
+  worker_semaphore_limit: 4     # 评测时可以更高并发
+  task_timeout: 180
+  max_retries_per_task: 3
+  replan_max_iterations: 5
+
+# HALLUCINATION 检测更严格
+verifier:
+  strict_mode: true
+  min_evidence_count: 3
+
+# 日志强制保留完整轨迹
+logging:
+  format: jsonl
+  output_dir: data/traces/eval
+  log_to_console: false
+  buffer_size: 500
+  flush_interval: 1
+
+# 评测时用 Docker 沙箱更安全
+tools:
+  code_execution:
+    sandbox: subprocess          # 评测时如果没有 Docker 可用 subprocess

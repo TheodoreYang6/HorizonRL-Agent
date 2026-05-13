@@ -1,0 +1,91 @@
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# HorizonRL-Agent 默认配置
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# 这是生产/正式运行使用的配置。开发环境请用 dev.yaml，
+# 评测环境请用 eval.yaml。所有 API Key 请通过 .env 文件设置，
+# 不要写在此文件中。
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+# ── LLM 配置 ───────────────────────────────────────────────────────────
+llm:
+  provider: openai              # openai | anthropic | vllm
+  model: gpt-4o                 # 推理主模型
+  temperature: 0.3              # 0.0=确定性, 1.0=随机性（Agent 推荐低温度）
+  max_tokens: 4096
+  base_url: null                # null=官方API, 自定义=vLLM地址
+
+# 轻量模型（用于 L2 摘要压缩、简单分类）
+lightweight_llm:
+  provider: openai
+  model: gpt-4o-mini
+  temperature: 0.0
+  max_tokens: 1024
+
+# Embedding 模型（用于 L3 向量检索）
+embedding:
+  provider: openai
+  model: text-embedding-3-small
+  dimensions: 1536              # text-embedding-3-small 默认维度
+
+# ── 分层记忆配置 ──────────────────────────────────────────────────────
+memory:
+  l1_max_tokens: 8000           # L1 最近窗口的 token 上限
+  l2_summary_model: gpt-4o-mini # L2 语义压缩用的模型
+  l2_max_entries: 50            # L2 最多保留的语义摘要数量
+  l3_embedding_model: text-embedding-3-small
+  l3_index_path: .memory/episodic_index  # FAISS 索引文件路径
+  retrieval_top_k: 5            # 检索返回的最大条目数
+  auto_compress_threshold: 0.8  # L1 使用率超过此值时自动触发压缩
+
+# ── Agent 执行配置 ──────────────────────────────────────────────────────
+agent:
+  max_steps: 30                 # 单任务最大执行步数
+  worker_semaphore_limit: 3     # 同时执行的 Worker 最大数量
+  task_timeout: 120             # 单个子任务超时（秒）
+  llm_call_timeout: 30          # 单次 LLM 调用超时（秒）
+  tool_call_timeout: 20         # 单次工具调用超时（秒）
+  max_retries_per_task: 3       # 单个子任务最多重试次数
+  replan_max_iterations: 5      # 单次任务最多重规划次数（防死循环）
+
+# ── 轨迹日志配置 ──────────────────────────────────────────────────────
+logging:
+  format: jsonl                 # jsonl | parquet
+  output_dir: data/traces       # 轨迹输出目录
+  log_to_console: false         # 是否同时输出到控制台
+  buffer_size: 100              # 内存缓冲事件数（攒够再写）
+  flush_interval: 5             # 强制刷新间隔（秒）
+
+# ── 工具配置 ──────────────────────────────────────────────────────────
+tools:
+  web_search:
+    engine: duckduckgo          # duckduckgo | serpapi | google
+    max_results: 10
+    timeout: 20
+  arxiv_search:
+    max_results: 20
+    timeout: 15
+  code_execution:
+    sandbox: subprocess         # subprocess | docker
+    timeout: 30
+    max_output_chars: 10000
+
+# ── 训练配置（Phase 3+，当前仅占位）────────────────────────────────────
+training:
+  model: Qwen2.5-3B             # RL 训练用的基础模型
+  learning_rate: 1.0e-6
+  kl_penalty: 0.01
+  grpo_epochs: 3
+  trajectory_buffer_size: 1000
+  num_envs: 4
+  reward:
+    task_success: 100.0         # 任务成功奖励
+    tool_call_success: 5.0      # 有效工具调用奖励
+    step_efficiency: 1.0        # 步数效率奖励
+    dead_loop_penalty: -10.0    # 死循环惩罚
+    timeout_penalty: -20.0      # 超时惩罚
+    hallucination_penalty: -5.0 # 幻觉惩罚
+
+# ── 调试与开发 ────────────────────────────────────────────────────────
+debug: false
+log_level: INFO                 # DEBUG | INFO | WARNING | ERROR
+log_dir: logs

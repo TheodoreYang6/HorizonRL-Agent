@@ -1,0 +1,69 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(pip install *)",
+      "Bash(python *)",
+      "Bash(pytest *)",
+      "Bash(uvx *)",
+      "Bash(npx *)",
+      "Bash(git *)",
+      "Bash(ls *)",
+      "Bash(mkdir *)",
+      "Bash(rm *)",
+      "Bash(cat *)",
+      "Bash(find *)",
+      "Bash(wc *)",
+      "Bash(echo *)",
+      "WebSearch",
+      "WebFetch",
+      "Bash(npm *)",
+      "Bash(uv *)"
+    ],
+    "deny": [
+      "Bash(rm -rf /)",
+      "Bash(git push --force origin main)",
+      "Bash(git push --force origin master)"
+    ]
+  },
+  "hooks": {
+    "pre-commit": [
+      "ruff check src/",
+      "ruff format --check src/",
+      "python -m pytest tests/test_imports.py -q"
+    ]
+  },
+  "mcpServers": {
+    "arxiv": {
+      "command": "uvx",
+      "args": ["arxiv-mcp-server"],
+      "env": {}
+    },
+    "brave-search": {
+      "command": "npx",
+      "args": ["-y", "@anthropic-ai/mcp-server-brave-search"],
+      "env": {
+        "BRAVE_API_KEY": "${BRAVE_API_KEY}"
+      }
+    },
+    "fetch": {
+      "command": "uvx",
+      "args": ["mcp-server-fetch"]
+    },
+    "filesystem": {
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-filesystem", "C:\\Users\\61770\\Desktop\\HorizonRL-Agent"]
+    },
+    "memory": {
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-memory"]
+    },
+    "sequential-thinking": {
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-sequential-thinking"]
+    },
+    "git": {
+      "command": "uvx",
+      "args": ["mcp-server-git", "--repository", "C:\\Users\\61770\\Desktop\\HorizonRL-Agent"]
+    }
+  }
+}
