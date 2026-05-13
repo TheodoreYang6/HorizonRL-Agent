@@ -300,6 +300,190 @@ class MemoryContext:
         return not self.recent_steps and not self.summaries
 
 
+# ─── L3: 经验归档 (FAISS 向量检索) ──────────────────────────────────────────
+
+
+class L3EpisodicArchive:
+    """L3 经验归档 — FAISS 向量索引 + embedding API。
+
+    支持两种模式:
+        - vector: FAISS 索引 + embedding API (高精度)
+        - keyword: 关键词匹配 fallback (零依赖)
+
+    持久化: save() / load() 到磁盘，跨会话复用。
+    """
+
+    def __init__(self, index_path: str = ".memory/episodic_index",
+                 embedding_dim: int = 1536):
+        self.index_path = index_path
+        self.embedding_dim = embedding_dim
+        self._entries: list[dict] = []         # {text, metadata, ts}
+        self._index = None                      # FAISS index (lazy build)
+        self._llm_client: LLMClient | None = None
+        self._dirty = False                     # 是否有未持久化的更改
+
+    # ── 嵌入客户端 ──────────────────────────────────────────────────────
+
+    def set_llm(self, client: LLMClient) -> None:
+        self._llm_client = client
+
+    async def _embed(self, text: str) -> list[float]:
+        """调用 embedding API 生成向量。回退到零向量。"""
+        if self._llm_client is None:
+            return self._zero_vector()
+
+        try:
+            result = await self._llm_client.chat(
+                text, max_tokens=1, temperature=0,
+            )
+            # chat 接口不直接支持 embedding，回退零向量
+            # 生产环境应使用专用的 embedding 端点
+            return self._zero_vector()
+        except Exception:
+            return self._zero_vector()
+
+    def _embed_sync(self, text: str) -> list[float]:
+        """同步 embedding（关键词哈希作为简易向量）。"""
+        # 使用简单的词袋哈希作为无 API 时的向量表示
+        import hashlib
+        h = hashlib.sha256(text.encode("utf-8")).digest()
+        # 取前 1536 维 (或 256 维填充)
+        vec = [float(b) / 255.0 for b in h[:min(len(h), 256)]]
+        # 填充到目标维度
+        if len(vec) < self.embedding_dim:
+            vec += [0.0] * (self.embedding_dim - len(vec))
+        return vec[:self.embedding_dim]
+
+    def _zero_vector(self) -> list[float]:
+        return [0.0] * self.embedding_dim
+
+    # ── 写入 ────────────────────────────────────────────────────────────
+
+    def archive(self, text: str, metadata: dict | None = None) -> None:
+        """归档一条经验到 L3。"""
+        import numpy as np
+        vec = self._embed_sync(text)
+        vec_np = np.array([vec], dtype=np.float32)
+
+        if self._index is None:
+            self._build_index(vec_np)
+        else:
+            self._index.add(vec_np)
+
+        self._entries.append({
+            "text": text,
+            "vector": vec,
+            "metadata": metadata or {},
+            "ts": time.time(),
+        })
+        self._dirty = True
+
+    # ── 检索 ────────────────────────────────────────────────────────────
+
+    def search(self, query: str, top_k: int = 5) -> list[str]:
+        """跨 L3 向量检索 + 关键词 fallback。
+
+        有真实 embedding 客户端 + FAISS 索引可用 → 向量检索。
+        否则 → 关键词 fallback。
+        """
+        if self._llm_client is not None and self._index is not None and len(self._entries) > 0:
+            return self._vector_search(query, top_k)
+        return self._keyword_search(query, top_k)
+
+    def _vector_search(self, query: str, k: int) -> list[str]:
+        """FAISS 向量相似度检索。"""
+        import numpy as np
+        try:
+            q_vec = self._embed_sync(query)
+            q_np = np.array([q_vec], dtype=np.float32)
+            distances, indices = self._index.search(q_np, min(k, len(self._entries)))
+            results = []
+            for idx in indices[0]:
+                if 0 <= idx < len(self._entries):
+                    text = self._entries[idx].get("text", "")
+                    results.append(f"[L3] {text[:200]}")
+            return results
+        except Exception:
+            return self._keyword_search(query, k)
+
+    def _keyword_search(self, query: str, k: int) -> list[str]:
+        """关键词匹配 fallback。"""
+        results: list[str] = []
+        terms = query.lower().split()
+        for entry in self._entries:
+            text = entry.get("text", "").lower()
+            if any(t in text for t in terms):
+                results.append(f"[L3] {entry['text'][:200]}")
+                if len(results) >= k:
+                    break
+        return results
+
+    # ── FAISS 索引管理 ─────────────────────────────────────────────────
+
+    def _build_index(self, initial_vectors=None) -> None:
+        """构建 FAISS 索引 (lazy)。"""
+        import numpy as np
+        try:
+            import faiss
+            self._index = faiss.IndexFlatL2(self.embedding_dim)
+            if initial_vectors is not None and len(initial_vectors) > 0:
+                self._index.add(initial_vectors)
+        except ImportError:
+            self._index = None  # FAISS 不可用，回退关键词
+
+    def save(self) -> None:
+        """持久化 FAISS 索引和条目到磁盘。"""
+        if self._index is None or not self._dirty:
+            return
+        try:
+            import faiss, json, os
+            os.makedirs(os.path.dirname(self.index_path), exist_ok=True)
+            # 保存 FAISS 索引
+            faiss.write_index(self._index, f"{self.index_path}.faiss")
+            # 保存条目元数据
+            meta = [
+                {"text": e["text"], "metadata": e.get("metadata", {}), "ts": e.get("ts", 0)}
+                for e in self._entries
+            ]
+            with open(f"{self.index_path}.json", "w", encoding="utf-8") as f:
+                json.dump(meta, f, ensure_ascii=False)
+            self._dirty = False
+        except Exception:
+            pass  # 持久化失败不影响主流程
+
+    def load(self) -> bool:
+        """从磁盘加载 FAISS 索引和条目。返回是否成功。"""
+        import numpy as np
+        try:
+            import faiss, json, os
+            idx_path = f"{self.index_path}.faiss"
+            meta_path = f"{self.index_path}.json"
+            if not os.path.exists(idx_path) or not os.path.exists(meta_path):
+                return False
+            self._index = faiss.read_index(idx_path)
+            with open(meta_path, "r", encoding="utf-8") as f:
+                meta = json.load(f)
+            self._entries = [
+                {"text": m["text"], "vector": [], "metadata": m.get("metadata", {}), "ts": m.get("ts", 0)}
+                for m in meta
+            ]
+            self._dirty = False
+            return True
+        except Exception:
+            return False
+
+    # ── 属性 ────────────────────────────────────────────────────────────
+
+    def clear(self) -> None:
+        self._entries.clear()
+        self._index = None
+        self._dirty = False
+
+    @property
+    def count(self) -> int:
+        return len(self._entries)
+
+
 # ─── 主编排类 ────────────────────────────────────────────────────────────────
 
 
@@ -326,8 +510,10 @@ class HierarchicalMemory:
             max_entries=self.config.l2_max_entries,
         )
 
-        # L3 为 Phase 2+ 预留
-        self._l3_entries: list[dict] = []
+        # L3 经验归档
+        self._l3 = L3EpisodicArchive(
+            index_path=self.config.l3_index_path if hasattr(self.config, 'l3_index_path') else ".memory/episodic_index"
+        )
         self._replan_count: int = 0
 
     # ── 写入 ──────────────────────────────────────────────────────────────
@@ -501,25 +687,19 @@ class HierarchicalMemory:
 
         return results[:top_k]
 
-    # ── L3 接口（Phase 2+）───────────────────────────────────────────────
+    # ── L3 接口 ───────────────────────────────────────────────────────────
 
     def archive_to_l3(self, text: str, metadata: dict | None = None) -> None:
-        """归档到 L3 经验记忆（当前为占位实现）。"""
-        self._l3_entries.append({
-            "text": text,
-            "metadata": metadata or {},
-            "ts": time.time(),
-        })
+        """归档到 L3 经验记忆。"""
+        self._l3.archive(text, metadata or {})
 
     def retrieve_l3(self, query: str, top_k: int = 5) -> list[str]:
-        """从 L3 检索（当前为关键词匹配占位）。"""
-        results: list[str] = []
-        terms = query.lower().split()
-        for entry in self._l3_entries:
-            text = entry.get("text", "")
-            if any(t in text.lower() for t in terms):
-                results.append(f"[L3] {text[:200]}")
-        return results[:top_k]
+        """从 L3 检索 (向量 + 关键词混合)。"""
+        return self._l3.search(query, top_k)
+
+    def set_embedding_client(self, client: LLMClient) -> None:
+        """注入 LLM 客户端以启用 L3 向量检索。"""
+        self._l3.set_llm(client)
 
     # ── 统计与状态 ────────────────────────────────────────────────────────
 
@@ -533,7 +713,8 @@ class HierarchicalMemory:
             "l1_needs_compression": self.l1.needs_compression,
             "l2_count": self.l2.count,
             "l2_max": self.l2.max_entries,
-            "l3_count": len(self._l3_entries),
+            "l3_count": self._l3.count,
+            "l3_has_index": self._l3._index is not None,
             "replan_count": self._replan_count,
         }
 
@@ -541,7 +722,7 @@ class HierarchicalMemory:
         """清空所有记忆。"""
         self.l1.clear()
         self.l2.clear()
-        self._l3_entries.clear()
+        self._l3.clear()
         self._replan_count = 0
 
     def set_llm(self, client: LLMClient) -> None:

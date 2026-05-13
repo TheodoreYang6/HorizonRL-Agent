@@ -4,6 +4,7 @@ from horizonrl.memory.hierarchical_memory import (
     HierarchicalMemory,
     L1RecentWindow,
     L2SemanticSummary,
+    L3EpisodicArchive,
     MemoryContext,
     MemoryEntry,
 )
@@ -13,5 +14,6 @@ __all__ = [
     "MemoryContext",
     "L1RecentWindow",
     "L2SemanticSummary",
+    "L3EpisodicArchive",
     "HierarchicalMemory",
 ]
