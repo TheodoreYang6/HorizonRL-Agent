@@ -29,18 +29,18 @@ from __future__ import annotations
 import uuid
 from typing import TYPE_CHECKING
 
+from horizonrl.schemas.result import (
+    ErrorType,
+    VerificationResult,
+)
 from horizonrl.schemas.task import (
-    TaskSpec,
+    PatchType,
     PlanGraph,
     PlanNode,
     PlanPatch,
-    PatchType,
-    TaskStatus,
     TaskPriority,
-)
-from horizonrl.schemas.result import (
-    VerificationResult,
-    ErrorType,
+    TaskSpec,
+    TaskStatus,
 )
 
 if TYPE_CHECKING:

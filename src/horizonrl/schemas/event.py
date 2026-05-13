@@ -38,11 +38,10 @@
 
 from __future__ import annotations
 
+import time as _time
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any
-import time as _time
-
 
 # ─── 事件类型 ──────────────────────────────────────────────────────────
 # 覆盖 Agent 执行全生命周期。每个模块的动作对应一种事件类型。

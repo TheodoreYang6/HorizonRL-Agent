@@ -14,12 +14,12 @@ import asyncio
 import time
 from typing import TYPE_CHECKING
 
-from horizonrl.schemas.result import StepResult, EvidenceItem, ToolCall
+from horizonrl.schemas.result import EvidenceItem, StepResult, ToolCall
 from horizonrl.schemas.task import TaskSpec
 
 if TYPE_CHECKING:
     from horizonrl.config.settings import RootConfig
-    from horizonrl.tools.manager import ToolManager, ToolCallRequest
+    from horizonrl.tools.manager import ToolManager
 
 
 class AgentWorker:

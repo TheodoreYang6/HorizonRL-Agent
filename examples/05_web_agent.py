@@ -1,31 +1,26 @@
 """
 =======================================================================
-05_web_agent.py — HorizonRL-Agent Web 交互界面
+05_web_agent.py — HorizonRL-Agent 对话式 Web 界面
 =======================================================================
 
-自包含 Web 应用：一个 Python 文件启动服务器，浏览器打开即可使用。
-前端用纯 HTML/CSS/JS 构建，后端用 aiohttp 异步处理。
+自包含 Web 应用：启动后浏览器打开即可使用。
+类似 ChatGPT 的对话体验，背后是完整的 Agent 管道。
 
 运行方式:
     python examples/05_web_agent.py
-    然后打开浏览器访问 http://localhost:8080
+    浏览器打开 http://localhost:8080
 
-功能:
-    - 输入研究问题，点击"开始研究"
-    - 实时显示 Pipeline 6 个阶段的进度
-    - 展示 DAG 任务结构、执行结果、证据列表
-    - 支持离线模式（无需 API Key）
-
-依赖:
-    aiohttp (pip install aiohttp)
+特性:
+    - 对话式自然语言输出（像 ChatGPT）
+    - 自动检测 LLM，有 API Key 用 LLM 合成，没有则用模板
+    - 真实联网搜索 (DDGS + Wikipedia + Arxiv)
+    - 后台运行完整 6-Stage Pipeline
+    - 过程细节可展开查看
 """
 
 from __future__ import annotations
 
-import asyncio
-import json
-import sys
-import time
+import asyncio, json, sys, time, re
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
@@ -34,9 +29,8 @@ from aiohttp import web
 
 from horizonrl.config.settings import load_config, RootConfig
 from horizonrl.schemas.task import UserTask, TaskStatus
-from horizonrl.schemas.result import ErrorType
 from horizonrl.schemas.event import EventType, TrajectoryEvent
-from horizonrl.agent.planner import Planner
+from horizonrl.agent.planner import Planner, LLMPlanner
 from horizonrl.agent.worker import AgentWorker
 from horizonrl.agent.verifier import Verifier
 from horizonrl.agent.replanner import Replanner
@@ -45,160 +39,142 @@ from horizonrl.tools.manager import ToolManager
 from horizonrl.memory.hierarchical_memory import HierarchicalMemory
 from horizonrl.logging.trajectory_logger import TrajectoryLogger
 
-
 # ╔══════════════════════════════════════════════════════════════════════════════╗
-# ║  HTML 前端                                                                   ║
+# ║  HTML 前端 — 对话式界面                                                      ║
 # ╚══════════════════════════════════════════════════════════════════════════════╝
 
-HTML_PAGE = """<!DOCTYPE html>
+HTML_PAGE = r"""<!DOCTYPE html>
 <html lang="zh-CN">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>HorizonRL-Agent — 多 Agent 研究系统</title>
+<title>HorizonRL-Agent — AI 研究助手</title>
 <style>
   :root {
     --bg: #0f1117; --surface: #1a1d27; --border: #2a2d3a;
     --text: #e1e4ea; --text2: #9ca3af; --accent: #6c8cff;
-    --success: #4ade80; --fail: #f87171; --warn: #fbbf24;
-    --radius: 8px;
+    --success: #4ade80; --fail: #f87171;
+    --radius: 12px;
   }
   * { margin: 0; padding: 0; box-sizing: border-box; }
-  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Microsoft YaHei', sans-serif;
          background: var(--bg); color: var(--text); min-height: 100vh; }
-  .container { max-width: 960px; margin: 0 auto; padding: 24px; }
+  .container { max-width: 800px; margin: 0 auto; padding: 20px; }
 
-  header { text-align: center; padding: 40px 0 24px; }
-  header h1 { font-size: 28px; background: linear-gradient(135deg, #6c8cff, #a78bfa);
+  header { text-align: center; padding: 30px 0 20px; }
+  header h1 { font-size: 24px; background: linear-gradient(135deg, #6c8cff, #a78bfa);
               -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
-  header p { color: var(--text2); margin-top: 8px; font-size: 14px; }
+  header p { color: var(--text2); font-size: 13px; margin-top: 4px; }
 
-  .search-box { display: flex; gap: 12px; margin-bottom: 32px; }
-  .search-box input { flex: 1; padding: 14px 18px; background: var(--surface);
+  .chat-area { min-height: 60vh; }
+
+  .message { margin-bottom: 20px; animation: fadeIn 0.3s; }
+  @keyframes fadeIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
+
+  .msg-user { display: flex; justify-content: flex-end; }
+  .msg-user .bubble { background: var(--accent); color: #fff; max-width: 80%; padding: 12px 18px;
+    border-radius: var(--radius) var(--radius) 4px var(--radius); font-size: 15px; line-height: 1.5; }
+
+  .msg-agent .bubble { background: var(--surface); border: 1px solid var(--border); max-width: 100%;
+    padding: 20px 24px; border-radius: var(--radius); font-size: 14px; line-height: 1.7; }
+  .msg-agent .bubble h1 { font-size: 20px; margin: 16px 0 8px; color: var(--accent); }
+  .msg-agent .bubble h2 { font-size: 16px; margin: 14px 0 6px; color: #a78bfa; }
+  .msg-agent .bubble h3 { font-size: 14px; margin: 10px 0 4px; }
+  .msg-agent .bubble p { margin: 6px 0; }
+  .msg-agent .bubble ul, .msg-agent .bubble ol { margin: 6px 0 6px 20px; }
+  .msg-agent .bubble table { border-collapse: collapse; margin: 8px 0; width: 100%; }
+  .msg-agent .bubble th, .msg-agent .bubble td { border: 1px solid var(--border); padding: 6px 10px;
+    text-align: left; font-size: 13px; }
+  .msg-agent .bubble th { background: var(--border); }
+  .msg-agent .bubble blockquote { border-left: 3px solid var(--accent); padding-left: 12px;
+    color: var(--text2); margin: 8px 0; }
+  .msg-agent .bubble code { background: #00000030; padding: 2px 6px; border-radius: 4px; font-size: 13px; }
+
+  .typing { color: var(--text2); font-size: 13px; padding: 8px 0; display: none; }
+  .typing.show { display: block; }
+  .typing span { animation: blink 1.4s infinite; }
+  @keyframes blink { 0%,100%{opacity:1} 50%{opacity:0} }
+
+  .process-toggle { font-size: 12px; color: var(--text2); cursor: pointer; margin-top: 8px;
+    user-select: none; }
+  .process-toggle:hover { color: var(--accent); }
+  .process-detail { display: none; margin-top: 12px; padding: 12px; background: #00000020;
+    border-radius: 8px; font-size: 12px; color: var(--text2); max-height: 200px; overflow-y: auto; }
+  .process-detail.show { display: block; }
+
+  .input-area { position: sticky; bottom: 0; background: var(--bg); padding: 16px 0; border-top: 1px solid var(--border); }
+  .input-row { display: flex; gap: 10px; }
+  .input-row input { flex: 1; padding: 12px 16px; background: var(--surface);
     border: 1px solid var(--border); border-radius: var(--radius); color: var(--text);
-    font-size: 15px; outline: none; }
-  .search-box input:focus { border-color: var(--accent); }
-  .search-box button { padding: 14px 28px; background: var(--accent); color: #fff;
-    border: none; border-radius: var(--radius); font-size: 15px; cursor: pointer;
-    font-weight: 600; white-space: nowrap; }
-  .search-box button:hover { opacity: 0.9; }
-  .search-box button:disabled { opacity: 0.4; cursor: not-allowed; }
+    font-size: 14px; outline: none; }
+  .input-row input:focus { border-color: var(--accent); }
+  .input-row button { padding: 12px 24px; background: var(--accent); color: #fff;
+    border: none; border-radius: var(--radius); font-size: 14px; cursor: pointer; font-weight: 600; }
+  .input-row button:hover { opacity: 0.9; }
+  .input-row button:disabled { opacity: 0.4; cursor: not-allowed; }
 
-  .status-bar { display: flex; gap: 8px; margin-bottom: 24px; flex-wrap: wrap; }
-  .status-dot { width: 10px; height: 10px; border-radius: 50%; background: var(--border);
-                 animation: pulse 1.5s infinite; display: none; }
-  .status-dot.active { display: block; background: var(--accent); }
-  .status-dot.done { display: block; background: var(--success); animation: none; }
-  @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.3} }
-  .stage-badge { padding: 4px 12px; border-radius: 20px; font-size: 12px;
-                 background: var(--surface); color: var(--text2); border: 1px solid var(--border); }
-  .stage-badge.active { border-color: var(--accent); color: var(--accent); }
-  .stage-badge.done { border-color: var(--success); color: var(--success); }
+  .mode-badge { font-size: 11px; padding: 2px 8px; border-radius: 10px; background: var(--surface);
+    border: 1px solid var(--border); color: var(--text2); display: inline-block; margin-bottom: 12px; }
+  .mode-badge.llm { border-color: var(--success); color: var(--success); }
 
-  .results { display: none; }
-  .results.show { display: block; }
+  footer { text-align: center; padding: 20px 0; color: var(--text2); font-size: 12px; }
 
-  .card { background: var(--surface); border: 1px solid var(--border);
-          border-radius: var(--radius); padding: 20px; margin-bottom: 16px; }
-  .card h3 { font-size: 16px; margin-bottom: 12px; color: var(--accent); }
-
-  .summary-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px,1fr));
-                  gap: 12px; }
-  .summary-item { text-align: center; padding: 12px; background: var(--bg);
-                  border-radius: var(--radius); }
-  .summary-item .num { font-size: 28px; font-weight: 700; }
-  .summary-item .num.ok { color: var(--success); }
-  .summary-item .num.warn { color: var(--warn); }
-  .summary-item .label { font-size: 12px; color: var(--text2); margin-top: 4px; }
-
-  .task-row { display: flex; align-items: center; gap: 12px; padding: 10px 0;
-              border-bottom: 1px solid var(--border); }
-  .task-row:last-child { border-bottom: none; }
-  .task-icon { width: 32px; height: 32px; border-radius: 50%; display: flex;
-               align-items: center; justify-content: center; font-size: 14px; }
-  .task-icon.ok { background: #1a3a2a; color: var(--success); }
-  .task-icon.fail { background: #3a1a1a; color: var(--fail); }
-  .task-info { flex: 1; }
-  .task-name { font-weight: 600; font-size: 14px; }
-  .task-meta { font-size: 12px; color: var(--text2); margin-top: 2px; }
-  .task-score { font-size: 13px; font-weight: 600; }
-
-  .evidence-list { max-height: 300px; overflow-y: auto; }
-  .evidence-item { padding: 8px 12px; margin-bottom: 6px; background: var(--bg);
-                   border-radius: 4px; font-size: 13px; border-left: 3px solid var(--accent); }
-  .evidence-item .src { font-size: 11px; color: var(--text2);
-                         background: var(--surface); padding: 2px 6px; border-radius: 3px;
-                         margin-right: 8px; }
-
-  .report-text { white-space: pre-wrap; font-size: 14px; line-height: 1.6;
-                 max-height: 600px; overflow-y: auto; }
-
-  .empty-state { text-align: center; padding: 60px 20px; color: var(--text2); }
-  .empty-state .icon { font-size: 48px; margin-bottom: 16px; }
-  footer { text-align: center; padding: 40px 0; color: var(--text2); font-size: 13px; }
+  .markdown-body { word-wrap: break-word; }
 </style>
 </head>
 <body>
 <div class="container">
   <header>
     <h1>HorizonRL-Agent</h1>
-    <p>多 Agent 长链路研究系统 — 输入一个问题，AI Agent 自动分解 → 搜索 → 验证 → 总结</p>
+    <p>AI 研究助手 — 多 Agent 协作搜索 + 验证 + 合成</p>
+    <span class="mode-badge" id="modeBadge">离线模式</span>
   </header>
 
-  <div class="search-box">
-    <input type="text" id="query" placeholder="输入你想研究的问题..."
-           value="Transformer 多头注意力机制的最新进展">
-    <button id="btn" onclick="startResearch()">开始研究</button>
-  </div>
-
-  <div id="stages" class="status-bar"></div>
-
-  <div id="results" class="results">
-    <div class="card">
-      <h3>执行概要</h3>
-      <div id="summary" class="summary-grid"></div>
-    </div>
-    <div class="card">
-      <h3>DAG 任务执行</h3>
-      <div id="tasks"></div>
-    </div>
-    <div class="card">
-      <h3>收集证据</h3>
-      <div id="evidence" class="evidence-list"></div>
-    </div>
-    <div class="card">
-      <h3>研究报告</h3>
-      <div id="report" class="report-text"></div>
+  <div class="chat-area" id="chatArea">
+    <div class="message msg-agent">
+      <div class="bubble">
+        你好！我是一个 AI 研究助手。<br><br>
+        输入你想研究的问题，我会：
+        <br>1. 自动分解任务
+        <br>2. 并行搜索网络和学术论文
+        <br>3. 验证结果质量
+        <br>4. 合成为自然语言研究报告<br><br>
+        试试：<b>"Transformer 注意力机制最新进展"</b>
+      </div>
     </div>
   </div>
 
-  <div id="empty" class="empty-state">
-    <div class="icon">🤖</div>
-    <p>输入研究问题，让 AI Agent 为你工作</p>
-    <p style="font-size:12px;margin-top:8px">
-       支持中文/英文问题 · Planner 拆解 → Worker 搜索 → Verifier 验证 → Replanner 修复 · 全程记录</p>
+  <div class="typing" id="typing">Agent 正在研究中<span>...</span></div>
+
+  <div class="input-area">
+    <div class="input-row">
+      <input type="text" id="query" placeholder="输入你的研究问题..."
+             value="Transformer 注意力机制最新进展"
+             onkeydown="if(event.key==='Enter')startResearch()">
+      <button id="btn" onclick="startResearch()">发送</button>
+    </div>
   </div>
 
-  <footer>HorizonRL-Agent v0.1.0 · 杨启铎 · NWPU · 2026</footer>
+  <footer>HorizonRL-Agent v0.1.0 · NWPU · 2026</footer>
 </div>
 
 <script>
-const STAGES = ['加载基础设施', '任务规划', '并发执行', '质量验证', '记忆总结', '生成报告'];
-
 function startResearch() {
   const q = document.getElementById('query').value.trim();
   if (!q) return;
 
-  document.getElementById('btn').disabled = true;
-  document.getElementById('btn').textContent = '研究中...';
-  document.getElementById('empty').style.display = 'none';
-  document.getElementById('results').classList.remove('show');
+  const btn = document.getElementById('btn');
+  btn.disabled = true;
+  btn.textContent = '研究中...';
 
-  // Show stages
-  const stagesDiv = document.getElementById('stages');
-  stagesDiv.innerHTML = STAGES.map((s,i) =>
-    `<span class="stage-badge" id="stage-${i}">${s}</span>`
-  ).join('');
+  // 添加用户消息
+  addMessage('user', q);
+
+  // 显示输入中
+  document.getElementById('typing').classList.add('show');
+
+  // 滚动到底部
+  document.getElementById('chatArea').scrollIntoView({behavior: 'smooth'});
 
   fetch('/api/research', {
     method: 'POST',
@@ -207,68 +183,107 @@ function startResearch() {
   })
   .then(r => r.json())
   .then(data => {
-    renderResults(data);
-    document.getElementById('btn').disabled = false;
-    document.getElementById('btn').textContent = '开始研究';
+    document.getElementById('typing').classList.remove('show');
+    if (data.error) {
+      addMessage('agent', '抱歉，研究过程出错：' + data.error);
+    } else {
+      // 添加 Agent 回答（自然语言报告）
+      addMessage('agent', data.report || '研究完成，但未能生成报告。', data.process);
+      if (data.llm_mode) {
+        document.getElementById('modeBadge').textContent = 'LLM 模式';
+        document.getElementById('modeBadge').classList.add('llm');
+      }
+    }
+    btn.disabled = false;
+    btn.textContent = '发送';
+    document.getElementById('chatArea').scrollIntoView({behavior: 'smooth'});
   })
   .catch(err => {
-    alert('研究失败: ' + err.message);
-    document.getElementById('btn').disabled = false;
-    document.getElementById('btn').textContent = '开始研究';
+    document.getElementById('typing').classList.remove('show');
+    addMessage('agent', '网络错误：' + err.message);
+    btn.disabled = false;
+    btn.textContent = '发送';
   });
 }
 
-function markStage(i, done) {
-  const el = document.getElementById('stage-' + i);
-  if (!el) return;
-  el.classList.add('active');
-  if (done) { el.classList.remove('active'); el.classList.add('done'); }
+function addMessage(role, content, process) {
+  const div = document.createElement('div');
+  div.className = 'message msg-' + (role === 'user' ? 'user' : 'agent');
+
+  if (role === 'user') {
+    div.innerHTML = '<div class="bubble">' + escapeHtml(content) + '</div>';
+  } else {
+    // 渲染 Markdown
+    let html = renderMarkdown(content);
+    let bubble = '<div class="bubble markdown-body">' + html + '</div>';
+
+    // 过程细节（可展开）
+    if (process) {
+      let procText = '';
+      if (process.tasks) {
+        procText += '任务执行：\n';
+        process.tasks.forEach(t => {
+          let icon = t.status === 'success' ? 'OK' : 'FAIL';
+          procText += `  [${icon}] ${t.name} — 工具:${t.tools} 评分:${t.score?.toFixed(1)} ${t.evidence}条证据\n`;
+        });
+      }
+      procText += '\n统计：' + (process.success||'?') + '/' + (process.total||'?') + ' 成功, '
+               + (process.rounds||'?') + '轮, ' + (process.tool_calls||'?') + '次工具调用, '
+               + (process.replans||'?') + '次重规划, ' + (process.elapsed||'?') + 's';
+
+      bubble += '<div class="process-toggle" onclick="this.nextElementSibling.classList.toggle(\'show\')">'
+             + '查看执行过程</div>';
+      bubble += '<div class="process-detail"><pre>' + escapeHtml(procText) + '</pre></div>';
+    }
+
+    div.innerHTML = bubble;
+  }
+
+  document.getElementById('chatArea').appendChild(div);
+  div.scrollIntoView({behavior: 'smooth'});
 }
 
-function renderResults(data) {
-  // Mark all stages done
-  STAGES.forEach((_, i) => markStage(i, true));
+function escapeHtml(s) {
+  return (s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
 
-  const results = document.getElementById('results');
-  results.classList.add('show');
+// 简单 Markdown 渲染
+function renderMarkdown(md) {
+  if (!md) return '';
+  let html = escapeHtml(md);
 
-  // Summary
-  const stats = data.stats || {};
-  const scoreColor = stats.success_rate >= 0.8 ? 'ok' : stats.success_rate >= 0.4 ? 'warn' : '';
-  document.getElementById('summary').innerHTML = `
-    <div class="summary-item"><div class="num ok">${stats.success_count||0}/${stats.total_count||0}</div><div class="label">任务完成</div></div>
-    <div class="summary-item"><div class="num">${stats.rounds||0}</div><div class="label">执行轮次</div></div>
-    <div class="summary-item"><div class="num">${stats.tool_calls||0}</div><div class="label">工具调用</div></div>
-    <div class="summary-item"><div class="num">${stats.replans||0}</div><div class="label">重规划</div></div>
-    <div class="summary-item"><div class="num">${data.total_evidence||0}</div><div class="label">收集证据</div></div>
-    <div class="summary-item"><div class="num">${data.plan_count||0}</div><div class="label">子任务数</div></div>
-  `;
+  // 标题
+  html = html.replace(/^### (.+)$/gm, '<h3>$1</h3>');
+  html = html.replace(/^## (.+)$/gm, '<h2>$1</h2>');
+  html = html.replace(/^# (.+)$/gm, '<h1>$1</h1>');
 
-  // Tasks
-  const tasks = data.tasks || [];
-  document.getElementById('tasks').innerHTML = tasks.map(t => `
-    <div class="task-row">
-      <div class="task-icon ${t.status==='success'?'ok':'fail'}">${t.status==='success'?'✓':'✗'}</div>
-      <div class="task-info">
-        <div class="task-name">${t.name}</div>
-        <div class="task-meta">工具: ${t.tools||'无'} | 依赖: ${t.deps||'无'} | ${t.evidence||0}条证据 | ${t.elapsed||0}s</div>
-      </div>
-      <div class="task-score" style="color:${t.score>=0.7?'var(--success)':t.score>=0.3?'var(--warn)':'var(--fail)'}">
-        评分 ${t.score?.toFixed(1)||'?'}
-      </div>
-    </div>
-  `).join('');
+  // 粗体
+  html = html.replace(/\*\*(.+?)\*\*/g, '<b>$1</b>');
 
-  // Evidence
-  const evidence = data.evidence || [];
-  document.getElementById('evidence').innerHTML = evidence.length > 0
-    ? evidence.slice(0, 10).map(e =>
-        `<div class="evidence-item"><span class="src">[${e.type}]</span>${e.content}</div>`
-      ).join('')
-    : '<div style="color:var(--text2)">(无证据)</div>';
+  // 表格（简化）
+  html = html.replace(/\|(.+)\|/g, function(m) {
+    if (m.includes('---')) return '';
+    let cells = m.split('|').filter(c => c.trim());
+    let row = '<tr>' + cells.map(c => '<td>' + c.trim() + '</td>').join('') + '</tr>';
+    return row;
+  });
 
-  // Report
-  document.getElementById('report').textContent = data.report || '(无报告)';
+  // 引用
+  html = html.replace(/^&gt; (.+)$/gm, '<blockquote>$1</blockquote>');
+
+  // 分隔线
+  html = html.replace(/^---$/gm, '<hr>');
+
+  // 换行
+  html = html.replace(/\n\n/g, '</p><p>');
+  html = html.replace(/\n/g, '<br>');
+  html = '<p>' + html + '</p>';
+
+  // 清理空标签
+  html = html.replace(/<p><\/p>/g, '');
+  html = html.replace(/<p><br><\/p>/g, '');
+
+  return html;
 }
 </script>
 </body>
@@ -281,7 +296,7 @@ function renderResults(data) {
 
 
 async def run_research(query: str) -> dict:
-    """运行完整研究管道，返回 JSON 可序列化的结果。"""
+    """运行完整研究管道，返回自然语言报告 + 过程数据。"""
     t0 = time.time()
 
     # ── 基础设施 ──
@@ -290,40 +305,49 @@ async def run_research(query: str) -> dict:
     except Exception:
         cfg = RootConfig()
 
+    # LLM 可用性检测
+    llm_client = None
+    if cfg.llm.api_key:
+        try:
+            from horizonrl.llm.client import LLMClient
+            llm_client = LLMClient(cfg.llm)
+        except Exception:
+            pass
+    llm_mode = llm_client is not None
+
+    # ── 工具注册 ──
     mgr = ToolManager()
-    # Web Search（真实优先）
     try:
         from horizonrl.tools.web_search import WebSearchTool
         mgr.register("web_search", WebSearchTool())
     except Exception:
         from horizonrl.tools.mock import MockWebSearch
         mgr.register("web_search", MockWebSearch())
-    # Arxiv Search（真实优先）
     try:
         from horizonrl.tools.arxiv_search import ArxivSearchTool
         mgr.register("arxiv_search", ArxivSearchTool(max_results=5))
     except Exception:
         from horizonrl.tools.mock import MockArxivSearch
         mgr.register("arxiv_search", MockArxivSearch())
-    # Code Execution（始终可用）
     try:
         from horizonrl.tools.code_execution import CodeExecutionTool
         mgr.register("code_execution", CodeExecutionTool(timeout=10.0))
     except Exception:
         from horizonrl.tools.mock import MockCodeExecution
         mgr.register("code_execution", MockCodeExecution())
+
     memory = HierarchicalMemory(cfg.memory)
-    logger = TrajectoryLogger(output_dir="trajectories")
-    await logger.start_session(query)
 
-    # ── 规划 ──
-    planner = Planner()
-    plan = planner.plan(UserTask(description=query, max_steps=20))
+    # ── 规划（简单问题用模板，复杂问题用 LLM）──
+    is_complex = any(kw in query for kw in ["对比", "比较", "区别", "vs", "优劣", "分析", "总结", "综述", "展望"])
+    use_llm = llm_mode and is_complex
 
-    await logger.log(TrajectoryEvent(
-        module="planner", event_type=EventType.PLAN_COMPLETE,
-        payload={"num_subtasks": plan.total_count(), "root_ids": plan.root_ids},
-    ))
+    if use_llm:
+        planner = LLMPlanner(llm_client)
+        plan = await planner.plan(UserTask(description=query, max_steps=20))
+    else:
+        planner = Planner()
+        plan = planner.plan(UserTask(description=query, max_steps=20))
 
     # ── DAG 执行 + 验证 + 重规划 ──
     verifier = Verifier(mode="rule")
@@ -331,48 +355,28 @@ async def run_research(query: str) -> dict:
     sem = asyncio.Semaphore(3)
     results: dict = {}
     verifications: dict = {}
-    task_details: list[dict] = []
-    all_evidence: list[dict] = []
+    task_details = []
     round_num = 0
     total_tool_calls = 0
     total_replans = 0
 
     while plan.has_pending_work():
         round_num += 1
-
         for node in plan.nodes.values():
             if node.status != TaskStatus.PENDING:
                 continue
-            deps_ok = all(
-                plan.nodes[d].status == TaskStatus.SUCCESS
-                for d in node.depends_on
-            )
-            if deps_ok:
+            if all(plan.nodes[d].status == TaskStatus.SUCCESS for d in node.depends_on):
                 node.status = TaskStatus.READY
 
         ready = plan.get_ready_nodes()
         if not ready:
-            pending = [n for n in plan.nodes.values()
-                       if n.status in (TaskStatus.PENDING, TaskStatus.READY)]
-            if pending:
-                break
             break
 
         async def exec_one(node):
             node.status = TaskStatus.RUNNING
-            node.started_at = time.time()
             async with sem:
                 worker = AgentWorker(worker_id=f"wrk_{node.id}", tool_manager=mgr)
-                result = await worker.execute(node.spec)
-            node.finished_at = time.time()
-
-            await logger.log(TrajectoryEvent(
-                module="worker",
-                event_type=EventType.WORKER_COMPLETE if result.success else EventType.WORKER_ERROR,
-                payload={"task_id": node.id, "success": result.success},
-                cost=result.tokens_used, latency=result.elapsed,
-            ))
-            return node, result
+                return node, await worker.execute(node.spec)
 
         batch = await asyncio.gather(*[exec_one(n) for n in ready])
 
@@ -380,12 +384,6 @@ async def run_research(query: str) -> dict:
             results[result.task_id] = result
             vr = await verifier.verify(result, node.spec)
             verifications[node.id] = vr
-
-            await logger.log(TrajectoryEvent(
-                module="verifier",
-                event_type=EventType.VERIFY_COMPLETE if vr.pass_ else EventType.VERIFY_FAIL,
-                payload={"task_id": node.id, "pass": vr.pass_, "score": vr.score},
-            ))
 
             if vr.pass_:
                 node.status = TaskStatus.SUCCESS
@@ -396,73 +394,44 @@ async def run_research(query: str) -> dict:
                     replanner.apply_patch(plan, patch)
                     total_replans += 1
                     memory.record_replan()
-                    await logger.log(TrajectoryEvent(
-                        module="replanner", event_type=EventType.REPLAN_PATCH,
-                        payload={"target_node": node.id, "patch_type": patch.patch_type.value},
-                    ))
                 else:
                     node.status = TaskStatus.FAILED
                     memory.record(result, vr)
 
             total_tool_calls += len(result.tool_calls)
-
-            deps_list = node.depends_on if node.depends_on else []
-            deps_names = [plan.nodes[d].spec.name if d in plan.nodes else d for d in deps_list]
-
             task_details.append({
-                "id": node.id,
                 "name": node.spec.name,
                 "tools": ", ".join(node.spec.tool_names) or "无",
-                "deps": ", ".join(deps_names) or "无",
                 "status": node.status.value,
                 "score": vr.score,
                 "evidence": len(result.evidence),
-                "elapsed": f"{result.elapsed:.1f}",
-                "output": result.output[:200],
             })
-
-            for ev in result.evidence:
-                all_evidence.append({
-                    "type": ev.source_type or "unknown",
-                    "content": ev.content[:250],
-                })
 
         memory.auto_compress()
 
-    # ── 记忆压缩 ──
-    if memory.l1.count > 0:
-        memory.compress(query)
-
-    # ── 报告 ──
+    # ── 报告合成 ──
     ctx = memory.get_context()
-    writer = Writer(mode="template")
-    report_text = writer.synthesize(
-        query=query,
-        plan=plan,
-        results=results,
-        verifications=verifications,
-        memory_ctx=ctx,
+    writer_mode = "llm" if llm_mode else "template"
+    writer = Writer(mode=writer_mode, llm_client=llm_client)
+    report_text = await writer.synthesize_async(
+        query=query, plan=plan, results=results,
+        verifications=verifications, memory_ctx=ctx,
     )
 
-    await logger.end_session(success=(plan.success_count() == plan.total_count()))
+    elapsed = time.time() - t0
 
     return {
-        "query": query,
-        "plan_count": plan.total_count(),
-        "rounds": round_num,
-        "stats": {
-            "success_count": plan.success_count(),
-            "total_count": plan.total_count(),
+        "report": report_text,
+        "llm_mode": llm_mode,
+        "process": {
+            "tasks": task_details,
+            "success": plan.success_count(),
+            "total": plan.total_count(),
             "rounds": round_num,
             "tool_calls": total_tool_calls,
             "replans": total_replans,
-            "success_rate": plan.success_count() / max(plan.total_count(), 1),
+            "elapsed": f"{elapsed:.1f}s",
         },
-        "tasks": task_details,
-        "evidence": all_evidence,
-        "total_evidence": len(all_evidence),
-        "report": report_text,
-        "elapsed": f"{time.time() - t0:.1f}s",
     }
 
 
@@ -481,7 +450,7 @@ async def handle_api_research(request: web.Request) -> web.Response:
     if not query:
         return web.json_response({"error": "请提供研究问题"}, status=400)
     if len(query) > 500:
-        return web.json_response({"error": "问题太长，请控制在500字以内"}, status=400)
+        return web.json_response({"error": "问题太长"}, status=400)
 
     result = await run_research(query)
     return web.json_response(result, dumps=lambda o: json.dumps(o, ensure_ascii=False))
@@ -491,29 +460,20 @@ def create_app() -> web.Application:
     app = web.Application()
     app.router.add_get("/", handle_index)
     app.router.add_post("/api/research", handle_api_research)
-    # 静态 favicon 避免 404
     app.router.add_get("/favicon.ico", lambda r: web.Response(status=204))
     return app
 
 
-# ╔══════════════════════════════════════════════════════════════════════════════╗
-# ║  入口                                                                        ║
-# ╚══════════════════════════════════════════════════════════════════════════════╝
-
-
 def main():
     import os
-
     app = create_app()
     port = int(os.environ.get("PORT", 8080))
 
     print(f"""
 ==============================================================
-  HorizonRL-Agent Web 界面
+  HorizonRL-Agent Web 界面 — 对话式 AI 研究助手
   http://localhost:{port}
-  在浏览器中打开上面的地址，输入研究问题即可体验。
-  按 Ctrl+C 停止服务。
-  (如果端口被占用，执行: taskkill /F /IM python.exe)
+  按 Ctrl+C 停止服务
 ==============================================================
 """)
     try:

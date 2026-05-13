@@ -176,11 +176,10 @@ class WebSearchTool:
                 })
             return results
 
-    async def _mock_search(
+    def _mock_search(
         self, query: str, n: int
     ) -> list[dict[str, str]]:
         """Mock search with helpful status messages."""
-        import time
         return [
             {
                 "title": f"[Mock] 搜索结果 {i+1}: {query[:40]}",

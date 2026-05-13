@@ -55,12 +55,10 @@ HorizonRL-Agent 配置管理系统
 from __future__ import annotations
 
 import os
-from dataclasses import field
 from pathlib import Path
 from typing import Any
 
 from pydantic import BaseModel, Field
-
 
 # ╔══════════════════════════════════════════════════════════════════════════════╗
 # ║  LLMConfig — LLM 端点配置                                                   ║
@@ -503,7 +501,7 @@ def _merge_yaml(config: RootConfig, yaml_path: Path) -> RootConfig:
     """
     import yaml
 
-    with open(yaml_path, "r", encoding="utf-8") as f:
+    with open(yaml_path, encoding="utf-8") as f:
         overlay_data = yaml.safe_load(f)
 
     if not overlay_data:
@@ -572,7 +570,7 @@ def _load_dotenv_manual(env_path: Path, override: bool = False) -> None:
         env_path: .env 文件路径。
         override: 是否覆盖已存在的环境变量。
     """
-    with open(env_path, "r", encoding="utf-8") as f:
+    with open(env_path, encoding="utf-8") as f:
         for line in f:
             line = line.strip()
             if not line or line.startswith("#"):

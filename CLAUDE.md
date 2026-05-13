@@ -22,10 +22,10 @@ Target: AAAI/IJCAI/ACL Findings 2027 submission + open-source release.
 | 个人偏好 | `CLAUDE.local.md`（git-ignored） |
 | API 配置 | `.env.example` → 复制为 `.env` |
 
-## Development Status (2026-05-13)
+## Development Status (2026-05-13 最终)
 
 ```
-Phase 1: 核心基础设施 — 2 天完成, MVP 可运行
+Phase 1: 核心基础设施 — 2 天完成, MVP 可运行, GitHub 已发布
   ✅ Step 0-1:  项目骨架 (.claude/, .gitignore)
   ✅ Step 2:    schemas/ (4文件16数据结构)
   ✅ Step 3:    configs/ (Pydantic V2 三级配置)
@@ -41,8 +41,10 @@ Phase 1: 核心基础设施 — 2 天完成, MVP 可运行
   ✅ Step 13:   examples/04_multi_agent_research.py (v1 Demo)
   ⬜ Step 14:   GitHub Public Beta (README/架构图/快速开始)
 
-  测试: 284 passed, 4 skipped, 0 failed
-  代码: ~11,300 行 (src 5858 + tests 3067 + examples 2369)
+  测试: 296 passed, 4 skipped, 0 failed
+  代码: ~14,000 行 (源码 + 测试 + Demo + 文档)
+  LLM: DeepSeek 已打通  |  Web Search: ddgs + Wikipedia 国内可用
+  GitHub: 已发布  |  ruff: 代码质量已优化
 ```
 
 ## Tech Stack

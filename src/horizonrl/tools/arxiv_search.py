@@ -65,8 +65,8 @@ class ArxivSearchTool:
 
     async def _api_search(self, query: str, max_results: int) -> list[dict[str, Any]]:
         """Fallback to raw arxiv API."""
+
         import httpx
-        import xml.etree.ElementTree as ET
 
         url = (
             f"http://export.arxiv.org/api/query?"

@@ -39,8 +39,6 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any
-
 
 # ─── 任务优先级 ───────────────────────────────────────────────────────────
 # 优先级决定 Worker 调度时谁先执行。

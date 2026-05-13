@@ -21,8 +21,8 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from horizonrl.schemas.task import PlanGraph, PlanNode, TaskStatus
-from horizonrl.schemas.result import StepResult, VerificationResult, EvidenceItem
+from horizonrl.schemas.result import StepResult, VerificationResult
+from horizonrl.schemas.task import PlanGraph
 
 if TYPE_CHECKING:
     from horizonrl.llm.client import LLMClient
@@ -269,8 +269,8 @@ class Writer:
         arxiv_count = len(arxiv_evidence)
         code_count = len(code_evidence)
         other_count = len(other_evidence)
-        lines.append(f"| 来源 | 数量 |")
-        lines.append(f"|------|------|")
+        lines.append("| 来源 | 数量 |")
+        lines.append("|------|------|")
         if web_count:
             lines.append(f"| 网络搜索 | {web_count} |")
         if arxiv_count:
@@ -283,7 +283,7 @@ class Writer:
         lines.append("")
 
         lines.append("---")
-        lines.append(f"*本报告由 HorizonRL-Agent v0.1.0 自动生成*")
+        lines.append("*本报告由 HorizonRL-Agent v0.1.0 自动生成*")
 
         return "\n".join(lines)
 

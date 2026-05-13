@@ -1,21 +1,21 @@
 """Agent tools: web search, arxiv search, code execution, retrieval, manager, mock."""
 
-from .web_search import WebSearchTool
 from .arxiv_search import ArxivSearchTool
 from .code_execution import CodeExecutionTool
 from .manager import (
+    CircuitBreaker,
     ToolCallRequest,
     ToolErrorType,
-    ToolStats,
-    CircuitBreaker,
     ToolManager,
+    ToolStats,
 )
 from .mock import (
-    MockWebSearch,
     MockArxivSearch,
     MockCodeExecution,
+    MockWebSearch,
     register_mock_tools,
 )
+from .web_search import WebSearchTool
 
 __all__ = [
     "WebSearchTool",

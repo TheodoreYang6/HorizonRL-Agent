@@ -27,11 +27,9 @@ from __future__ import annotations
 
 import asyncio
 import json
-import os
 import time
 import uuid
 from pathlib import Path
-from typing import TYPE_CHECKING
 
 from horizonrl.schemas.event import (
     EventType,
@@ -282,7 +280,7 @@ def read_session(filepath: str | Path) -> TrajectorySession:
         raise FileNotFoundError(f"日志文件不存在: {filepath}")
 
     events: list[TrajectoryEvent] = []
-    with open(str(filepath), "r", encoding="utf-8") as f:
+    with open(str(filepath), encoding="utf-8") as f:
         for line in f:
             line = line.strip()
             if not line:

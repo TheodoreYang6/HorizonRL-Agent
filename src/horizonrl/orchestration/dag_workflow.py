@@ -52,22 +52,6 @@ from __future__ import annotations
 
 import asyncio
 import time
-import uuid
-from typing import Any, Literal
-
-from langgraph.graph import StateGraph, END
-from langgraph.checkpoint.memory import InMemorySaver
-
-from horizonrl.schemas.task import (
-    TaskSpec,
-    TaskStatus,
-    PlanNode,
-    PlanGraph,
-    UserTask,
-)
-from horizonrl.schemas.result import StepResult, EvidenceItem, ToolCall
-from horizonrl.agent.planner import Planner
-from horizonrl.agent.worker import AgentWorker
 
 # ─── LangGraph 工作流状态 ────────────────────────────────────────────────
 # 使用 Annotated TypedDict 定义 LangGraph 状态 schema。
@@ -82,9 +66,18 @@ from horizonrl.agent.worker import AgentWorker
 #     final_output:  最终报告文本
 #     error:         错误信息（死锁或异常时设置）
 #     started_at:    工作流启动时间戳
+from typing import Literal
 
-from typing import TypedDict, Annotated
-import operator
+from langgraph.graph import END, StateGraph
+
+from horizonrl.agent.planner import Planner
+from horizonrl.agent.worker import AgentWorker
+from horizonrl.schemas.result import EvidenceItem, StepResult, ToolCall
+from horizonrl.schemas.task import (
+    PlanNode,
+    TaskStatus,
+    UserTask,
+)
 
 
 def _make_initial_state(

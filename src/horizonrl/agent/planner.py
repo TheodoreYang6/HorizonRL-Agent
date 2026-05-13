@@ -15,10 +15,10 @@ import uuid
 from typing import TYPE_CHECKING
 
 from horizonrl.schemas.task import (
+    PlanGraph,
+    PlanNode,
     TaskPriority,
     TaskSpec,
-    PlanNode,
-    PlanGraph,
     UserTask,
 )
 
@@ -259,9 +259,9 @@ class LLMPlanner:
 
     def _system_prompt(self) -> str:
         return (
-            "你是一个任务规划专家。你的职责是将用户的研究问题或编程任务"
-            "拆解为 4-7 个结构化的子任务。每个子任务需要指定：名称、描述、"
-            "需要的工具、依赖关系、优先级。你只输出 JSON，不输出其他内容。"
+            "你是一个任务规划专家。将用户的问题拆解为可并行执行的子任务。"
+            "核心原则：能并行的任务绝不串行。只有真正依赖前一步结果的任务才加依赖。"
+            "简单问题 3-4 个任务即可，复杂问题 5-6 个。只输出 JSON，不解释。"
         )
 
     def _build_prompt(self, task: UserTask) -> str:
@@ -271,26 +271,20 @@ class LLMPlanner:
         else:
             tools_hint = "可选工具: web_search, arxiv_search, code_execution"
 
-        return f"""请将以下任务拆解为 4-7 个子任务。
+        return f"""将以下问题拆解为子任务。重点是最大化并行度——互相不依赖的任务必须设为空依赖数组。
 
-任务描述: {task.description}
+问题: {task.description}
 {tools_hint}
-最大步数限制: {task.max_steps}
 
-输出一个 JSON 数组，每个元素为:
-{{
-    "name": "子任务简短名称",
-    "description": "子任务详细描述，Worker 据此执行",
-    "tool_names": ["需要的工具名"],
-    "depends_on": [依赖的前置任务索引(从0开始), 无依赖则为空数组],
-    "priority": "p0|p1|p2"
-}}
+输出 JSON 数组，每个元素:
+{{"name": "任务名", "description": "详细描述", "tool_names": ["web_search"], "depends_on": [], "priority": "p0"}}
 
-规则:
-1. depends_on 用数组索引（整数），表示这个任务依赖第几个前置任务完成
-2. p0=关键路径(必须先做), p1=正常, p2=可后置(如润色)
-3. 不要列出不存在的工具名
-4. 只输出 JSON 数组，不要输出其他解释
+关键规则:
+- depends_on 用整数索引，空数组[]表示可并行执行
+- 只有真正需要前一步输出结果的任务才加依赖，否则全部设为[]
+- p0=关键路径(先执行), p1=正常, p2=可选后置
+- 简单问题拆3-4个，复杂问题拆5-6个
+- 只输出JSON数组
 
 JSON:"""
 

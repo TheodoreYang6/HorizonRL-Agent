@@ -34,7 +34,6 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any
 
-
 # ─── 验证错误类型 ───────────────────────────────────────────────────────
 # Verifier 不只是一个 pass/fail 开关，它必须告诉系统"哪里错了"，
 # 这样 Replanner 才能对症下药。

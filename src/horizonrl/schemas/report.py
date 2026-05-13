@@ -21,7 +21,6 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-
 # ╔══════════════════════════════════════════════════════════════════════════════╗
 # ║  CitationMap — 引用映射                                                      ║
 # ╚══════════════════════════════════════════════════════════════════════════════╝
@@ -141,7 +140,7 @@ class FinalReport:
             "",
             f"> 研究问题: {self.user_task}",
             "",
-            f"## 摘要",
+            "## 摘要",
             "",
             self.summary,
             "",

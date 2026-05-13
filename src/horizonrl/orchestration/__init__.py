@@ -2,8 +2,8 @@
 
 from horizonrl.orchestration.dag_workflow import (
     ResearchOrchestrator,
-    create_orchestrator,
     _make_initial_state,
+    create_orchestrator,
 )
 
 __all__ = [

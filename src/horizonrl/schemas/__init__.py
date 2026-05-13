@@ -12,24 +12,6 @@ HorizonRL-Agent 数据模型层（Schema Layer）。
     from horizonrl.schemas.report import FinalReport, CitationMap
 """
 
-from horizonrl.schemas.task import (
-    TaskPriority,
-    TaskStatus,
-    UserTask,
-    TaskSpec,
-    PlanNode,
-    PlanGraph,
-    PatchType,
-    PlanPatch,
-)
-from horizonrl.schemas.result import (
-    ErrorType,
-    ToolCall,
-    EvidenceItem,
-    StepResult,
-    VerificationResult,
-    ActionResult,
-)
 from horizonrl.schemas.event import (
     EventType,
     TrajectoryEvent,
@@ -37,8 +19,26 @@ from horizonrl.schemas.event import (
 )
 from horizonrl.schemas.report import (
     CitationMap,
-    ReportSection,
     FinalReport,
+    ReportSection,
+)
+from horizonrl.schemas.result import (
+    ActionResult,
+    ErrorType,
+    EvidenceItem,
+    StepResult,
+    ToolCall,
+    VerificationResult,
+)
+from horizonrl.schemas.task import (
+    PatchType,
+    PlanGraph,
+    PlanNode,
+    PlanPatch,
+    TaskPriority,
+    TaskSpec,
+    TaskStatus,
+    UserTask,
 )
 
 __all__ = [

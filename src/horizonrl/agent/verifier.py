@@ -25,9 +25,8 @@ from typing import TYPE_CHECKING
 from horizonrl.schemas.result import (
     ErrorType,
     StepResult,
-    VerificationResult,
-    EvidenceItem,
     ToolCall,
+    VerificationResult,
 )
 from horizonrl.schemas.task import TaskSpec
 

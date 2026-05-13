@@ -21,8 +21,8 @@ from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from horizonrl.config.settings import MemoryConfig
-    from horizonrl.schemas.result import StepResult, VerificationResult
     from horizonrl.llm.client import LLMClient
+    from horizonrl.schemas.result import StepResult, VerificationResult
 
 
 # ─── 记忆条目 ────────────────────────────────────────────────────────────────
@@ -346,7 +346,6 @@ class HierarchicalMemory:
         Returns:
             创建的 MemoryEntry。
         """
-        from horizonrl.schemas.result import StepResult as SR, VerificationResult as VR
 
         entry = MemoryEntry(
             task_id=result.task_id,
