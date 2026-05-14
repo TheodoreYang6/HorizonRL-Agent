@@ -307,11 +307,14 @@ class L3EpisodicArchive:
     """L3 经验归档 — FAISS 向量索引 + embedding API。
 
     支持两种模式:
-        - vector: FAISS 索引 + embedding API (高精度)
-        - keyword: 关键词匹配 fallback (零依赖)
+        - vector: FAISS 索引 + n-gram 特征哈希 (零依赖，语义近似)
+        - keyword: 关键词匹配 fallback
 
     持久化: save() / load() 到磁盘，跨会话复用。
     """
+
+    # L2 归一化向量距离范围 [0, sqrt(2)]，阈值 1.35 平衡召回/精度
+    SIM_THRESHOLD: float = 1.35
 
     def __init__(self, index_path: str = ".memory/episodic_index",
                  embedding_dim: int = 1536):
@@ -322,40 +325,53 @@ class L3EpisodicArchive:
         self._llm_client: LLMClient | None = None
         self._dirty = False                     # 是否有未持久化的更改
 
-    # ── 嵌入客户端 ──────────────────────────────────────────────────────
+    # ── 嵌入 ──────────────────────────────────────────────────────────
 
     def set_llm(self, client: LLMClient) -> None:
         self._llm_client = client
 
     async def _embed(self, text: str) -> list[float]:
-        """调用 embedding API 生成向量。回退到零向量。"""
-        if self._llm_client is None:
-            return self._zero_vector()
-
-        try:
-            result = await self._llm_client.chat(
-                text, max_tokens=1, temperature=0,
-            )
-            # chat 接口不直接支持 embedding，回退零向量
-            # 生产环境应使用专用的 embedding 端点
-            return self._zero_vector()
-        except Exception:
-            return self._zero_vector()
+        """生成文本向量。优先用 embedding API，否则 n-gram 特征哈希。"""
+        if self._llm_client is not None and hasattr(self._llm_client, "embed"):
+            try:
+                result = await self._llm_client.embed(text)
+                if result.is_success and result.embedding:
+                    return result.embedding
+            except Exception:
+                pass
+        return self._ngram_embed(text)
 
     def _embed_sync(self, text: str) -> list[float]:
-        """同步 embedding（关键词哈希作为简易向量）。"""
-        # 使用简单的词袋哈希作为无 API 时的向量表示
-        import hashlib
-        h = hashlib.sha256(text.encode("utf-8")).digest()
-        # 取前 1536 维 (或 256 维填充)
-        vec = [float(b) / 255.0 for b in h[:min(len(h), 256)]]
-        # 填充到目标维度
-        if len(vec) < self.embedding_dim:
-            vec += [0.0] * (self.embedding_dim - len(vec))
-        return vec[:self.embedding_dim]
+        """同步生成文本向量（n-gram 特征哈希）。"""
+        return self._ngram_embed(text)
 
-    def _zero_vector(self) -> list[float]:
-        return [0.0] * self.embedding_dim
+    def _ngram_embed(self, text: str) -> list[float]:
+        """n-gram 特征哈希向量化（确定性哈希，跨进程一致）。
+
+        对文本提取 2-gram、3-gram、4-gram，用 MD5 哈希到固定维度，
+        L2 归一化。MD5 保证同文本在任何进程/重启后产生相同向量，
+        使 FAISS 持久化索引在 save→load 后仍可正确检索。
+        """
+        import hashlib
+        import math
+
+        vec = [0.0] * self.embedding_dim
+        if not text:
+            return vec
+
+        for n in (2, 3, 4):
+            for i in range(len(text) - n + 1):
+                ngram = text[i:i + n]
+                h = int.from_bytes(
+                    hashlib.md5(ngram.encode("utf-8")).digest()[:4], "big"
+                )
+                vec[h % self.embedding_dim] += 1.0
+
+        # L2 归一化
+        total = math.sqrt(sum(v * v for v in vec))
+        if total > 0:
+            vec = [v / total for v in vec]
+        return vec
 
     # ── 写入 ────────────────────────────────────────────────────────────
 
@@ -381,25 +397,44 @@ class L3EpisodicArchive:
     # ── 检索 ────────────────────────────────────────────────────────────
 
     def search(self, query: str, top_k: int = 5) -> list[str]:
-        """跨 L3 向量检索 + 关键词 fallback。
+        """跨 L3 混合检索：向量召回 → 关键词后过滤。
 
-        有真实 embedding 客户端 + FAISS 索引可用 → 向量检索。
-        否则 → 关键词 fallback。
+        1. FAISS n-gram 向量检索召回 top_k 候选（高召回）
+        2. 关键词重叠过滤无关结果（保证精度）
+        3. FAISS 不可用时回退纯关键词匹配
         """
-        if self._llm_client is not None and self._index is not None and len(self._entries) > 0:
-            return self._vector_search(query, top_k)
+        if self._index is not None and len(self._entries) > 0:
+            return self._hybrid_search(query, top_k)
         return self._keyword_search(query, top_k)
 
+    def _hybrid_search(self, query: str, k: int) -> list[str]:
+        """混合检索：向量召回 + 关键词后过滤。"""
+        candidates = self._vector_search(query, max(k * 2, 10))
+        if not candidates:
+            return self._keyword_search(query, k)
+        # 关键词后过滤：至少一个查询词出现在候选文本中
+        terms = query.lower().split()
+        filtered = []
+        prefix_len = len("[L3] ")
+        for c in candidates:
+            text = c[prefix_len:] if c.startswith("[L3] ") else c
+            if any(t in text.lower() for t in terms):
+                filtered.append(c)
+                if len(filtered) >= k:
+                    break
+        return filtered
+
     def _vector_search(self, query: str, k: int) -> list[str]:
-        """FAISS 向量相似度检索。"""
+        """FAISS 向量相似度检索（带距离阈值过滤）。"""
         import numpy as np
         try:
             q_vec = self._embed_sync(query)
             q_np = np.array([q_vec], dtype=np.float32)
-            distances, indices = self._index.search(q_np, min(k, len(self._entries)))
+            d_count = min(k, len(self._entries))
+            distances, indices = self._index.search(q_np, d_count)
             results = []
-            for idx in indices[0]:
-                if 0 <= idx < len(self._entries):
+            for i, idx in enumerate(indices[0]):
+                if 0 <= idx < len(self._entries) and distances[0][i] < self.SIM_THRESHOLD:
                     text = self._entries[idx].get("text", "")
                     results.append(f"[L3] {text[:200]}")
             return results

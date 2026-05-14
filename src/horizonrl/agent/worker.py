@@ -92,7 +92,9 @@ class AgentWorker:
             if tc.is_success:
                 all_outputs.append(tc.output)
                 # 从工具输出中提取证据
-                evidence = self._extract_evidence(tool_name, tc.output, task.id)
+                evidence = self._extract_evidence(
+                    tool_name, tc.output, task.id, task.description
+                )
                 evidence_items.extend(evidence)
             else:
                 all_outputs.append(f"[{tool_name}] 失败: {tc.error}")
@@ -147,7 +149,8 @@ class AgentWorker:
         return {"input": task.description}
 
     def _extract_evidence(
-        self, tool_name: str, output: str, task_id: str
+        self, tool_name: str, output: str, task_id: str,
+        task_description: str = "",
     ) -> list[EvidenceItem]:
         """从工具输出中提取 EvidenceItem 列表。
 
@@ -155,6 +158,7 @@ class AgentWorker:
             tool_name: 工具名称。
             output: 工具原始输出（可能是字符串化的 JSON）。
             task_id: 关联的任务 ID。
+            task_description: 任务描述，用作 search_query fallback。
 
         Returns:
             EvidenceItem 列表。
@@ -164,7 +168,7 @@ class AgentWorker:
 
         if tool_name == "web_search":
             # 优先使用 ToolManager 的规范化方法
-            query_text = task_id  # 从 task 推断 query
+            query_text = task_description or task_id
             if self.tool_manager and hasattr(self.tool_manager, 'normalize_search_results'):
                 normalized = self.tool_manager.normalize_search_results(
                     tool_name, output, query=query_text
@@ -204,6 +208,7 @@ class AgentWorker:
                         source="web_search",
                         source_type="web",
                         provider="web_search",
+                        search_query=query_text,
                         is_mock=is_mock,
                         retrieved_at=now,
                     ))

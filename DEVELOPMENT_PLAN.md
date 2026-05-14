@@ -1,10 +1,10 @@
-# HorizonRL-Agent 开发路线图 v6.0 (最终)
+# HorizonRL-Agent 开发路线图 v7.0 (Day 3)
 
-> **更新日期**: 2026-05-13 (Day 2 最终)
-> **状态**: Phase 1 + Phase 2 全部完成, GitHub 已发布
+> **更新日期**: 2026-05-14 (Day 3)
+> **状态**: Phase 1 + Phase 2 全部完成, P0/P1/P2 集成验收完毕
 > **测试**: 323 passed, 4 skipped, 0 failed
-> **代码量**: ~15,000 行
-> **Git**: 14 commits
+> **代码量**: ~16,000 行
+> **Git**: 14 commits (待提交)
 
 ---
 
@@ -91,6 +91,17 @@ Day 1 (05/12): Steps 0-8  — 骨架 + schemas + tools + agent + orchestration
 Day 2 (05/13): Steps 9-18 — verifier + replanner + memory + logger + writer
                             + web + LLM集成 + 消融 + FAISS + benchmark + SSE
                             + ChatGPT建议产品化优化
+Day 3 (05/14): P0/P1/P2  — 核心模块全集成 + Bug修复 + 代码审查
+    P0-1: Verifier+Replanner 接入 LangGraph 主循环 (dag_workflow.py 6 节点)
+    P0-2: HierarchicalMemory 接入主循环 (L1 记录 + auto_compress)
+    P0-3: Writer v2 接入 _finalize (final_answer.md + debug_report.md)
+    P1-1: Worker query_text 修复 (task.description 替代 task_id)
+    P1-2: L3 FAISS n-gram 嵌入 (MD5 确定性哈希 + 混合检索)
+    P1-3: LLMClient.embed() 方法 (OpenAI Embedding API)
+    P2-1: Planner 重复代码消除 (_build_plan_graph 共享函数)
+    P2-2: 7 个 Demo 验收
+    P2-3: SYSTEM_MANUAL.md v3.0 (910 行, 16 章)
+    5 轮代码审查: 发现并修复 15+ 个 Bug
 ```
 
 ## 3.2 关键数字
@@ -173,17 +184,34 @@ StepResult + EvidenceItem[] (带 SearchProvenance)
 # 七、下一步
 
 ```
-明天:
-  □ 整体验收: 跑所有 Demo + 看效果
-  □ 论文大纲
-  □ 录 demo 视频 (用于展示)
+短期 (本周):
+  ✅ 整体验收: 跑所有 Demo (4/7 通过, 3 个因 DDGS 超时)
+  ✅ 文档更新: SYSTEM_MANUAL.md v3.0
+  ✅ 代码审查: 5 轮, 15+ Bug 修复
+  □ 论文大纲初稿
+  □ Git commit + push
 
 Phase 3 (等 GPU):
   □ vLLM 部署
   □ GRPO/PPO RL 训练
+  □ token 级流式输出
+  □ 真实 Embedding API 集成
+
+Phase 4 (论文):
+  □ AAAI/IJCAI/ACL Findings 2027 投稿
 ```
+
+### Day 3 交付清单
+
+| 类别 | 内容 |
+|------|------|
+| 架构 | Verifier+Replanner+Memory+Writer 全接入 LangGraph 6 节点状态机 |
+| 功能 | L3 n-gram 向量检索 + 混合检索 (MD5 确定性) |
+| 质量 | 5 轮审查, 15+ Bug 修复, 323 测试 0 失败 |
+| 文档 | SYSTEM_MANUAL.md 910 行 16 章, DEVELOPMENT_PLAN.md v7.0 |
+| 代码 | dag_workflow.py 835 行, memory L3 重写, llm/client.py embed() |
 
 ---
 
-*本文件 v6.0，基于 Day 1-2 完整开发数据。*
+*本文件 v7.0，基于 Day 1-3 完整开发数据。*
 *核心原则: 先能跑，再好看 → 先可测，再扩展 → 先日志化，再 RL → 先 GitHub，再论文*

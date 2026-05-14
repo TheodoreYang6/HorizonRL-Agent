@@ -1,8 +1,5 @@
 """
-LangGraph DAG 编排 —— Agent 工作流的主状态机。
-
-用 LangGraph StateGraph 管理从用户任务到最终报告的完整生命周期。
-每个节点是纯函数（state -> partial_state），条件边根据 PlanGraph 进度路由。
+LangGraph DAG 编排 —— Agent 工作流的主状态机（v2: Verifier+Replanner+Memory+Writer 全集成）。
 
 ── 图结构 ──
 
@@ -10,36 +7,46 @@ LangGraph DAG 编排 —— Agent 工作流的主状态机。
       │
       ▼
   ┌──────────┐
-  │ plan_task │  Planner 将 UserTask 分解为 PlanGraph
+  │plan_task │  Planner 将 UserTask 分解为 PlanGraph + 生成 session_id
   └────┬─────┘
        │
        ▼
   ┌──────────┐
-  │mark_ready│  将依赖已满足的 PENDING 节点标记为 READY
+  │mark_ready│  将依赖满足的 PENDING 节点标记为 READY
   └────┬─────┘
        │
        ▼
-  ┌──────────────┐
-  │ route_after  │  条件路由
-  │  _mark_ready │
-  └──┬───┬───┬───┘
-     │   │   │
-     │   │   └── "deadlock" ──► END (error)
-     │   │
-     │   └────── "done" ──────► finalize ──► END
-     │
-     └────────── "execute" ───► execute_batch ──┐
-                                                 │
-                    ◄────────────────────────────┘
-                    (loop back to mark_ready)
-
-── 扩展点 (Phase 2+) ──
-
-    execute_batch ──► verify_step ──► route_verify
-                         │              │
-                         │   pass ──────► mark_ready
-                         │   fail ──────► replan ──► mark_ready
-                         │   fatal ─────► END
+  ┌──────────────┐          ┌──────────┐
+  │ route_after  │ "done" → │ finalize │ → END
+  │  _mark_ready │──────────│(Writer双 │
+  └──────┬───────┘          │ 输出)    │
+         │                  └──────────┘
+         │ "execute"            ▲
+         ▼                     │ "deadlock"
+  ┌──────────────┐             │ (也到finalize)
+  │execute_batch │             │
+  └──────┬───────┘             │
+         │                     │
+         ▼                     │
+  ┌──────────────┐   ┌─────────┴──────┐
+  │verify_batch  │   │ route_after    │
+  │(Verifier+L1) │──▶│   _verify      │
+  └──────────────┘   └──┬───┬───┬─────┘
+                        │   │   │
+    "continue"  ◄───────┘   │   └── "deadlock" → finalize
+    (to mark_ready)         │
+                    "done" ─┘
+                    (to finalize)
+                        │
+                "replan" │
+                        ▼
+              ┌──────────────┐
+              │   replan     │  Replanner 生成 PlanPatch → 回写 PlanGraph
+              │(记录重规划)  │  L1 记录
+              └──────┬───────┘
+                     │
+                     ▼
+                 mark_ready (loop)
 
 ── 使用方式 ──
 
@@ -51,29 +58,44 @@ LangGraph DAG 编排 —— Agent 工作流的主状态机。
 from __future__ import annotations
 
 import asyncio
+import inspect
 import time
+import uuid
+from pathlib import Path
 
 # ─── LangGraph 工作流状态 ────────────────────────────────────────────────
-# 使用 Annotated TypedDict 定义 LangGraph 状态 schema。
 # 每个节点返回部分更新，LangGraph 按 reducer 语义合并。
 #
 # 字段说明：
 #     user_task:     用户的原始问题描述
+#     session_id:    会话唯一标识（plan_task 生成）
 #     plan:          Planner 分解后的 PlanGraph（含 DAG 节点和边）
-#     results:       task_id -> StepResult 累积映射（操作符合并）
+#     results:       task_id -> StepResult dict 累积映射
+#     verifications: node_id -> VerificationResult dict 累积映射
 #     iteration:     当前已执行轮数
+#     replan_count:  重规划触发次数
 #     max_iterations: 防止死循环的硬上限
-#     final_output:  最终报告文本
+#     final_output:  最终报告文本（Writer v2 生成）
 #     error:         错误信息（死锁或异常时设置）
-#     started_at:    工作流启动时间戳
 from typing import Literal
 
 from langgraph.graph import END, StateGraph
 
 from horizonrl.agent.planner import Planner
+from horizonrl.agent.replanner import Replanner
+from horizonrl.agent.verifier import Verifier
 from horizonrl.agent.worker import AgentWorker
-from horizonrl.schemas.result import EvidenceItem, StepResult, ToolCall
+from horizonrl.agent.writer import Writer
+from horizonrl.memory.hierarchical_memory import HierarchicalMemory
+from horizonrl.schemas.result import (
+    ErrorType,
+    EvidenceItem,
+    StepResult,
+    ToolCall,
+    VerificationResult,
+)
 from horizonrl.schemas.task import (
+    PatchType,
     PlanNode,
     TaskStatus,
     UserTask,
@@ -87,9 +109,12 @@ def _make_initial_state(
     """创建初始工作流状态（纯 dict，兼容 LangGraph checkpoint 序列化）。"""
     return {
         "user_task": user_task,
+        "session_id": "",
         "plan": None,
         "results": {},
+        "verifications": {},
         "iteration": 0,
+        "replan_count": 0,
         "max_iterations": max_iterations,
         "final_output": "",
         "error": "",
@@ -98,11 +123,7 @@ def _make_initial_state(
 
 
 def _step_result_to_dict(r: StepResult) -> dict:
-    """将 StepResult 转为 JSON-可序列化的纯 dict。
-
-    LangGraph 的 InMemorySaver 用 JsonPlusSerializer 做 checkpoint 持久化，
-    dataclass 嵌套类型可能无法正确序列化/反序列化。转为纯 dict 保证跨节点传递可靠。
-    """
+    """将 StepResult 转为 JSON-可序列化的纯 dict。"""
     return {
         "task_id": r.task_id,
         "success": r.success,
@@ -114,6 +135,9 @@ def _step_result_to_dict(r: StepResult) -> dict:
                 "source_type": e.source_type,
                 "relevance_score": e.relevance_score,
                 "retrieved_at": e.retrieved_at,
+                "provider": e.provider,
+                "search_query": e.search_query,
+                "is_mock": e.is_mock,
             }
             for e in r.evidence
         ],
@@ -148,6 +172,9 @@ def _dict_to_step_result(d: dict) -> StepResult:
                 source_type=e.get("source_type", ""),
                 relevance_score=e.get("relevance_score", 0.0),
                 retrieved_at=e.get("retrieved_at", 0.0),
+                provider=e.get("provider", ""),
+                search_query=e.get("search_query", ""),
+                is_mock=e.get("is_mock", False),
             )
             for e in d.get("evidence", [])
         ],
@@ -169,9 +196,43 @@ def _dict_to_step_result(d: dict) -> StepResult:
     )
 
 
+def _verification_to_dict(vr: VerificationResult) -> dict:
+    """将 VerificationResult 序列化为 dict。"""
+    return {
+        "pass_": vr.pass_,
+        "score": vr.score,
+        "error_type": vr.error_type.value,
+        "feedback": vr.feedback,
+        "evidence_gaps": vr.evidence_gaps,
+        "suggested_actions": vr.suggested_actions,
+        "tokens_used": vr.tokens_used,
+        "elapsed": vr.elapsed,
+    }
+
+
+def _dict_to_verification(d: dict) -> VerificationResult:
+    """从 dict 恢复 VerificationResult。"""
+    error_str = d.get("error_type", "none")
+    try:
+        error_type = ErrorType(error_str)
+    except ValueError:
+        error_type = ErrorType.NONE
+    return VerificationResult(
+        pass_=d.get("pass_", False),
+        score=d.get("score", 0.0),
+        error_type=error_type,
+        feedback=d.get("feedback", ""),
+        evidence_gaps=d.get("evidence_gaps", []),
+        suggested_actions=d.get("suggested_actions", []),
+        tokens_used=d.get("tokens_used", 0),
+        elapsed=d.get("elapsed", 0.0),
+    )
+
+
 # ─── 路由决策类型 ────────────────────────────────────────────────────────
 
 RouteDecision = Literal["execute", "done", "deadlock"]
+VerifyRoute = Literal["continue", "replan", "done", "deadlock"]
 
 
 # ╔══════════════════════════════════════════════════════════════════════════════╗
@@ -180,22 +241,20 @@ RouteDecision = Literal["execute", "done", "deadlock"]
 
 
 class ResearchOrchestrator:
-    """基于 LangGraph StateGraph 的多 Agent 研究编排器。
+    """基于 LangGraph StateGraph 的多 Agent 研究编排器（v2 全集成）。
 
-    管理完整生命周期：规划 → 执行（循环）→ 汇总。
-    支持 MemorySaver checkpoint，可以暂停/恢复/重放。
+    管理完整生命周期：规划 → 执行 → 验证 → 重规划 → 汇总。
+    集成 Verifier/Replanner/HierarchicalMemory/Writer v2。
 
     Attributes:
         planner: 任务分解器
         tool_manager: 统一工具管理器（共享给所有 Worker）
+        verifier: 结构化验证器（默认 rule 模式）
+        replanner: 局部重规划器（默认 max_retries=3）
+        memory: 分层记忆 L1/L2/L3（默认 HierarchicalMemory）
+        writer: 报告合成器（默认 template 模式）
         semaphore_limit: 每轮最大并发 Worker 数
         max_iterations: 最多执行轮数（防止死循环）
-
-    Examples:
-        >>> orchestrator = ResearchOrchestrator(planner, tool_manager)
-        >>> state = await orchestrator.run("调研 Transformer 注意力机制")
-        >>> state.final_output[:200]
-        '## task_xxx...'
     """
 
     def __init__(
@@ -204,11 +263,20 @@ class ResearchOrchestrator:
         tool_manager,
         semaphore_limit: int = 3,
         max_iterations: int = 10,
+        verifier: Verifier | None = None,
+        replanner: Replanner | None = None,
+        memory: HierarchicalMemory | None = None,
     ):
         self.planner = planner
         self.tool_manager = tool_manager
         self.semaphore_limit = semaphore_limit
         self.max_iterations = max_iterations
+        self.verifier = verifier or Verifier(mode="rule")
+        self.replanner = replanner or Replanner(
+            max_retries_per_task=3, max_total_replans=5
+        )
+        self.memory = memory or HierarchicalMemory()
+        self.writer = Writer(mode="template")
 
         # 构建并编译 LangGraph 状态图
         self._graph = self._build_graph()
@@ -252,13 +320,14 @@ class ResearchOrchestrator:
         Returns:
             编译后的 CompiledStateGraph，可直接 ainvoke(initial_state, config)。
         """
-        # 使用纯 dict 作为状态类型，兼容 checkpoint 序列化
         builder = StateGraph(dict)
 
         # 节点注册
         builder.add_node("plan_task", self._plan_task)
         builder.add_node("mark_ready", self._mark_ready)
         builder.add_node("execute_batch", self._execute_batch)
+        builder.add_node("verify_batch", self._verify_batch)
+        builder.add_node("replan", self._replan)
         builder.add_node("finalize", self._finalize)
 
         # 边：START → plan_task → mark_ready
@@ -266,50 +335,69 @@ class ResearchOrchestrator:
         builder.add_edge("plan_task", "mark_ready")
 
         # 条件边：mark_ready → route → execute / done / deadlock
+        # 注意：deadlock 也路由到 finalize，确保用户能拿到部分报告
         builder.add_conditional_edges(
             "mark_ready",
             self._route_after_mark_ready,
             {
                 "execute": "execute_batch",
                 "done": "finalize",
-                "deadlock": END,
+                "deadlock": "finalize",
             },
         )
 
-        # 循环：execute_batch → mark_ready
-        builder.add_edge("execute_batch", "mark_ready")
+        # execute_batch → verify_batch（执行完后验证）
+        builder.add_edge("execute_batch", "verify_batch")
+
+        # 条件边：verify_batch → route_verify → continue / replan / done / deadlock
+        # 注意：deadlock 也路由到 finalize，确保用户能拿到部分报告
+        builder.add_conditional_edges(
+            "verify_batch",
+            self._route_after_verify,
+            {
+                "continue": "mark_ready",
+                "replan": "replan",
+                "done": "finalize",
+                "deadlock": "finalize",
+            },
+        )
+
+        # replan → mark_ready（重规划后重新调度）
+        builder.add_edge("replan", "mark_ready")
 
         # 终态：finalize → END
         builder.add_edge("finalize", END)
 
-        # 编译（Phase 2+ 接入 InMemorySaver 做持久化 checkpoint）
-        # 当前不启用以避免嵌套 dataclass 序列化兼容问题，
-        # 状态在内存中以纯 dict 形式在节点间传递，已通过 _step_result_to_dict 保证序列化安全。
         return builder.compile()
 
     # ── 节点实现 ─────────────────────────────────────────────────────────
 
     async def _plan_task(self, state: dict) -> dict:
-        """plan_task 节点：用户任务 → PlanGraph。
-
-        仅在 plan 为 None 时执行分解；如果 state 中已有 plan（如从 checkpoint 恢复），
-        则直接透传，避免覆盖外部注入的测试 PlanGraph。
-        """
+        """plan_task 节点：用户任务 → PlanGraph。"""
         if state.get("plan") is not None:
-            return {}  # 已有 plan，不重新分解
+            # 已有 plan（如从 checkpoint 恢复），确保 session_id 存在
+            sid = state.get("session_id") or f"session_{uuid.uuid4().hex[:12]}"
+            return {"session_id": sid}
+
+        session_id = state.get("session_id") or f"session_{uuid.uuid4().hex[:12]}"
         user_task = UserTask(
             description=state.get("user_task", ""),
             max_steps=30,
             max_tokens=50_000,
         )
         plan = self.planner.plan(user_task)
-        return {"plan": plan}
+        return {"plan": plan, "session_id": session_id}
 
     async def _mark_ready(self, state: dict) -> dict:
         """mark_ready 节点：将依赖满足的 PENDING 节点标记为 READY。"""
         plan = state.get("plan")
         if plan is None:
-            return {"error": "plan is None"}
+            return {
+                "error": "plan is None",
+                "results": state.get("results", {}),
+                "verifications": state.get("verifications", {}),
+                "replan_count": state.get("replan_count", 0),
+            }
 
         for node in plan.nodes.values():
             if node.status != TaskStatus.PENDING:
@@ -321,18 +409,34 @@ class ResearchOrchestrator:
             if deps_satisfied:
                 node.status = TaskStatus.READY
 
-        # 兜底：回传已有 results，避免 LangGraph dict state merge 时丢失
-        return {"plan": plan, "results": state.get("results", {})}
+        # 兜底：回传已有状态，避免 LangGraph dict state merge 时丢失
+        return {
+            "plan": plan,
+            "results": state.get("results", {}),
+            "verifications": state.get("verifications", {}),
+            "replan_count": state.get("replan_count", 0),
+        }
 
     async def _execute_batch(self, state: dict) -> dict:
         """execute_batch 节点：并发执行本轮所有 READY 任务。"""
         plan = state.get("plan")
         if plan is None:
-            return {"error": "plan is None"}
+            return {
+                "error": "plan is None",
+                "results": state.get("results", {}),
+                "verifications": state.get("verifications", {}),
+                "replan_count": state.get("replan_count", 0),
+            }
 
         ready_nodes = plan.get_ready_nodes()
         if not ready_nodes:
-            return {"iteration": state.get("iteration", 0) + 1}
+            # 防御：路由不应在此条件下到达，但保留安全返回
+            return {
+                "plan": plan,
+                "results": state.get("results", {}),
+                "verifications": state.get("verifications", {}),
+                "replan_count": state.get("replan_count", 0),
+            }
 
         sem = asyncio.Semaphore(self.semaphore_limit)
 
@@ -363,47 +467,282 @@ class ResearchOrchestrator:
             "plan": plan,
             "results": results,
             "iteration": state.get("iteration", 0) + 1,
+            "verifications": state.get("verifications", {}),
+            "replan_count": state.get("replan_count", 0),
         }
 
-    async def _finalize(self, state: dict) -> dict:
-        """finalize 节点：汇总所有结果生成最终输出。"""
+    # ── Verifier + Replanner 节点 ────────────────────────────────────────
+
+    async def _verify_batch(self, state: dict) -> dict:
+        """verify_batch 节点：对本轮执行结果进行并行验证。
+
+        遍历 results 中尚未验证的任务，调用 Verifier 做质量检查。
+        使用 asyncio.gather 并行验证所有待验证任务。
+        """
         plan = state.get("plan")
         raw_results = state.get("results", {})
+        verifications = dict(state.get("verifications", {}))
+
+        if plan is None:
+            return {
+                "verifications": verifications,
+                "results": state.get("results", {}),
+                "replan_count": state.get("replan_count", 0),
+            }
+
+        # 收集待验证的任务
+        verify_tasks: list[tuple[str, PlanNode, StepResult]] = []
+        for node_id, node in plan.nodes.items():
+            result_dict = raw_results.get(node.spec.id)
+            if result_dict is None:
+                continue
+            if node_id in verifications:
+                continue
+            if node.status not in (TaskStatus.SUCCESS, TaskStatus.FAILED):
+                continue
+            result = _dict_to_step_result(result_dict)
+            verify_tasks.append((node_id, node, result))
+
+        # 并行验证
+        async def _verify_one(node_id: str, node: PlanNode, result: StepResult):
+            task_desc = node.spec.description or node.spec.name
+            vr = await self.verifier.verify(result, task_desc)
+            return node_id, node, result, vr
+
+        if verify_tasks:
+            batch = await asyncio.gather(*[
+                _verify_one(nid, node, result)
+                for nid, node, result in verify_tasks
+            ])
+            for node_id, node, result, vr in batch:
+                verifications[node_id] = _verification_to_dict(vr)
+                if vr.pass_:
+                    node.status = TaskStatus.SUCCESS
+                else:
+                    node.status = TaskStatus.FAILED
+                    node.error_msg = vr.feedback
+                self.memory.record(result, vr)
+
+            # L1 自动压缩（超阈值时 L1→L2）
+            self.memory.auto_compress()
+
+        return {
+            "plan": plan,
+            "verifications": verifications,
+            "results": raw_results,
+            "replan_count": state.get("replan_count", 0),
+        }
+
+    def _route_after_verify(self, state: dict) -> VerifyRoute:
+        """verify_batch 之后的调度决策。
+
+        决策树：
+            1. 验证全部通过且无更多 pending → done
+            2. 有可重试的失败任务 → replan
+            3. 全部通过但有更多 pending → continue
+            4. 有失败但不可重试 → deadlock
+        """
+        plan = state.get("plan")
+        verifications = state.get("verifications", {})
+
+        if plan is None:
+            return "done"
+
+        # 收集本轮验证失败的节点
+        failed_nodes: list[str] = []
+        for node_id, vdict in verifications.items():
+            vr = _dict_to_verification(vdict)
+            if not vr.pass_:
+                node = plan.nodes.get(node_id)
+                if node and node.status == TaskStatus.FAILED:
+                    failed_nodes.append(node_id)
+
+        # 无失败 → 检查是否还有工作
+        if not failed_nodes:
+            if plan.has_pending_work():
+                return "continue"
+            return "done"
+
+        # 有失败 → 检查是否可重规划
+        can_replan_any = False
+        for nid in failed_nodes:
+            if self.replanner.should_replan(
+                _dict_to_verification(verifications[nid]), nid
+            ):
+                can_replan_any = True
+                break
+
+        if can_replan_any:
+            return "replan"
+
+        # 失败且无法重试 → 检查是否有其他可继续的工作
+        if plan.has_pending_work():
+            return "continue"
+
+        return "deadlock"
+
+    async def _replan(self, state: dict) -> dict:
+        """replan 节点：对验证失败的任务生成 PlanPatch 并应用。"""
+        plan = state.get("plan")
+        verifications = dict(state.get("verifications", {}))
+        replan_count = state.get("replan_count", 0)
+
+        if plan is None:
+            return {
+                "error": "replan: plan is None",
+                "results": state.get("results", {}),
+                "verifications": state.get("verifications", {}),
+                "replan_count": state.get("replan_count", 0),
+            }
+
+        for node_id, vdict in list(verifications.items()):
+            vr = _dict_to_verification(vdict)
+            if vr.pass_:
+                continue
+            if not self.replanner.should_replan(vr, node_id):
+                continue
+
+            if inspect.iscoroutinefunction(self.replanner.replan):
+                patch = await self.replanner.replan(vr, plan, node_id)
+            else:
+                patch = self.replanner.replan(vr, plan, node_id)
+
+            if patch is not None:
+                self.replanner.apply_patch(plan, patch)
+                replan_count += 1
+                self.memory.record_replan()
+                # RETRY 后清除旧验证记录，让重试结果被重新验证
+                if patch.patch_type == PatchType.RETRY:
+                    verifications.pop(node_id, None)
+
+        return {
+            "plan": plan,
+            "replan_count": replan_count,
+            "verifications": verifications,
+            "results": state.get("results", {}),
+        }
+
+    # ── 终态节点 ──────────────────────────────────────────────────────────
+
+    async def _finalize(self, state: dict) -> dict:
+        """finalize 节点：用 Writer v2 生成 final_answer.md + debug_report.md。
+
+        Writer 不可用时回退到原始 Markdown 拼接。
+        """
+        plan = state.get("plan")
+        raw_results = state.get("results", {})
+        verifications = state.get("verifications", {})
+        replan_count = state.get("replan_count", 0)
+        query = state.get("user_task", "")
+        session_id = state.get("session_id", "")
+
+        if plan is None:
+            return {
+                "final_output": "No plan generated.",
+                "error": state.get("error", ""),
+                "replan_count": state.get("replan_count", 0),
+                "results": state.get("results", {}),
+                "verifications": state.get("verifications", {}),
+            }
+
+        # 转换 dict → 对象，供 Writer 使用
+        results = {k: _dict_to_step_result(v) for k, v in raw_results.items()}
+        vr_objects = {k: _dict_to_verification(v) for k, v in verifications.items()}
+        mem_ctx = self.memory.get_context()
+        stats = {
+            "total_count": plan.total_count(),
+            "rounds": state.get("iteration", 0),
+            "total_replans": replan_count,
+        }
+
+        try:
+            final_path, debug_path = await self.writer.write_reports(
+                query=query,
+                session_id=session_id,
+                plan=plan,
+                results=results,
+                verifications=vr_objects,
+                memory_ctx=mem_ctx,
+                stats=stats,
+            )
+            final_text = Path(final_path).read_text(encoding="utf-8")
+            return {
+                "final_output": final_text,
+                "plan": plan,
+                "results": raw_results,
+                "verifications": verifications,
+                "replan_count": replan_count,
+                "error": state.get("error", ""),
+            }
+        except Exception:
+            # Writer 失败或 session_id 为空时回退到原始 Markdown 拼接
+            final_text = self._build_raw_final(state)
+            return {
+                "final_output": final_text,
+                "plan": plan,
+                "results": raw_results,
+                "verifications": verifications,
+                "replan_count": replan_count,
+                "error": state.get("error", ""),
+            }
+
+    def _build_raw_final(self, state: dict) -> str:
+        """原始 Markdown 拼接（Writer 不可用时的 fallback）。"""
+        plan = state.get("plan")
+        raw_results = state.get("results", {})
+        verifications = state.get("verifications", {})
+        replan_count = state.get("replan_count", 0)
         parts: list[str] = []
 
-        if plan is not None:
-            parts.append("# 研究任务执行报告\n")
-            parts.append(f"任务描述: {state.get('user_task', 'N/A')}\n")
-            parts.append(f"完成情况: {plan.success_count()}/{plan.total_count()} 子任务成功\n")
-            parts.append(f"执行轮数: {state.get('iteration', 0)}\n\n")
+        error = state.get("error", "")
 
-            for node in plan.nodes.values():
-                result_dict = raw_results.get(node.spec.id)
-                if result_dict is None:
-                    parts.append(f"## {node.spec.name}\n状态: {node.status.value}\n\n")
-                    continue
-                success = result_dict.get("success", False)
-                elapsed = result_dict.get("elapsed", 0.0)
-                evidence_count = len(result_dict.get("evidence", []))
-                output_text = result_dict.get("output", "")
-                icon = "+" if success else "-"
-                parts.append(f"## {node.spec.name}\n")
-                parts.append(f"状态: {icon} | 耗时: {elapsed:.1f}s | "
-                             f"证据: {evidence_count}条\n\n")
-                if output_text:
-                    parts.append(f"{output_text[:500]}\n\n")
+        if plan is None:
+            return f"No plan generated.{chr(10)}Error: {error}" if error else "No plan generated."
 
-            parts.append("---\n## 统计\n")
-            total_tokens = sum(r.get("tokens_used", 0) for r in raw_results.values())
-            total_time_s = sum(r.get("elapsed", 0.0) for r in raw_results.values())
-            total_evidence = sum(len(r.get("evidence", [])) for r in raw_results.values())
-            parts.append(f"- Token: {total_tokens}\n")
-            parts.append(f"- 总耗时: {total_time_s:.1f}s\n")
-            parts.append(f"- 收集证据: {total_evidence}条\n")
-        else:
-            parts.append("No plan generated.")
+        parts.append("# 研究任务执行报告\n")
+        if error:
+            parts.append(f"> [ERROR] 工作流异常: {error}\n")
+        parts.append(f"任务描述: {state.get('user_task', 'N/A')}\n")
+        parts.append(f"完成情况: {plan.success_count()}/{plan.total_count()} 子任务成功\n")
+        parts.append(f"执行轮数: {state.get('iteration', 0)}\n\n")
 
-        return {"final_output": "\n".join(parts), "plan": plan, "results": raw_results}
+        for node in plan.nodes.values():
+            result_dict = raw_results.get(node.spec.id)
+            vdict = verifications.get(node.id, {})
+            if result_dict is None:
+                parts.append(f"## {node.spec.name}\n状态: {node.status.value}\n\n")
+                continue
+            success = result_dict.get("success", False)
+            elapsed = result_dict.get("elapsed", 0.0)
+            evidence_count = len(result_dict.get("evidence", []))
+            output_text = result_dict.get("output", "")
+            v_score = vdict.get("score", 0)
+            v_pass = vdict.get("pass_", success)
+            icon = "+" if (success and v_pass) else "-"
+            parts.append(f"## {node.spec.name}\n")
+            parts.append(f"状态: {icon} | 耗时: {elapsed:.1f}s | "
+                         f"证据: {evidence_count}条 | 验证: {v_score:.1f}\n\n")
+            if output_text:
+                parts.append(f"{output_text[:500]}\n\n")
+
+        parts.append("---\n## 统计\n")
+        total_tokens = sum(r.get("tokens_used", 0) for r in raw_results.values())
+        total_time_s = sum(r.get("elapsed", 0.0) for r in raw_results.values())
+        total_evidence = sum(len(r.get("evidence", [])) for r in raw_results.values())
+        parts.append(f"- Token: {total_tokens}\n")
+        parts.append(f"- 总耗时: {total_time_s:.1f}s\n")
+        parts.append(f"- 收集证据: {total_evidence}条\n")
+        parts.append(f"- 重规划: {replan_count}次\n")
+
+        mem_stats = self.memory.get_stats()
+        if mem_stats["l1_count"] > 0:
+            parts.append("\n## 记忆系统\n")
+            parts.append(f"- L1条目: {mem_stats['l1_count']}, "
+                         f"Token: {mem_stats['l1_tokens']}/{mem_stats['l1_max_tokens']}\n")
+            parts.append(f"- L2摘要: {mem_stats['l2_count']}/{mem_stats['l2_max']}\n")
+            parts.append(f"- L3归档: {mem_stats['l3_count']}条\n")
+
+        return "\n".join(parts)
 
     # ── 路由逻辑 ─────────────────────────────────────────────────────────
 

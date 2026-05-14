@@ -37,6 +37,20 @@ class LLMCallResult:
         return self.error == ""
 
 
+@dataclass
+class EmbedResult:
+    """单次 Embedding 调用的返回结果。"""
+
+    embedding: list[float] | None = None
+    tokens_used: int = 0
+    elapsed: float = 0.0
+    error: str = ""
+
+    @property
+    def is_success(self) -> bool:
+        return self.error == "" and self.embedding is not None
+
+
 class LLMClient:
     """OpenAI-compatible LLM 调用客户端。
 
@@ -132,3 +146,38 @@ class LLMClient:
     def chat_sync(self, prompt: str, system_prompt: str = "") -> LLMCallResult:
         """同步调用（内部用 asyncio.run 包装）。"""
         return asyncio.run(self.chat(prompt, system_prompt))
+
+    async def embed(self, text: str) -> EmbedResult:
+        """调用 OpenAI-compatible Embedding API 生成向量。
+
+        Args:
+            text: 要嵌入的文本。
+
+        Returns:
+            EmbedResult（含向量、token 数、耗时）。
+        """
+        start = time.monotonic()
+        try:
+            client = self._get_client()
+            response = await asyncio.wait_for(
+                client.embeddings.create(
+                    model=self.config.model,
+                    input=text,
+                ),
+                timeout=getattr(self.config, "llm_call_timeout", 10),
+            )
+            return EmbedResult(
+                embedding=list(response.data[0].embedding),
+                tokens_used=response.usage.total_tokens if response.usage else 0,
+                elapsed=time.monotonic() - start,
+            )
+        except asyncio.TimeoutError:
+            return EmbedResult(
+                elapsed=time.monotonic() - start,
+                error="Embedding 调用超时",
+            )
+        except Exception as exc:
+            return EmbedResult(
+                elapsed=time.monotonic() - start,
+                error=f"Embedding 调用失败: {exc}",
+            )

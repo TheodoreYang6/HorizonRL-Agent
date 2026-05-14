@@ -173,8 +173,21 @@ class TestFinalizeNode:
     async def test_output_includes_stats(self, orchestrator):
         state = _make_initial_state(user_task="测试", max_iterations=10)
         state.update(await orchestrator._plan_task(state))
+        # 构造一条执行结果，让 Writer 有内容可写
+        state["results"] = {
+            "task_001": {
+                "task_id": "task_001", "success": True,
+                "output": "测试输出内容",
+                "evidence": [], "tool_calls": [],
+                "tokens_used": 100, "elapsed": 1.0,
+                "error": "", "worker_id": "wrk_1",
+            }
+        }
         result = await orchestrator._finalize(state)
-        assert "Token" in result["final_output"]
+        # Writer v2 的 final_answer 是用户视角，不含 Token 等调试信息
+        assert len(result["final_output"]) > 0
+        assert "final_output" in result
+        assert "plan" in result
 
 
 # ─── Route Logic ────────────────────────────────────────────────────────
@@ -249,7 +262,10 @@ class TestEndToEnd:
         states = []
         async for node_name, ws in orchestrator.stream("测试流式执行"):
             states.append((node_name, ws))
-            assert node_name in ("plan_task", "mark_ready", "execute_batch", "finalize")
+            assert node_name in (
+                "plan_task", "mark_ready", "execute_batch",
+                "verify_batch", "replan", "finalize",
+            )
         assert len(states) >= 3
 
     @pytest.mark.asyncio

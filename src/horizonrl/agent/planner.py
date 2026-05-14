@@ -31,6 +31,28 @@ def _short_id() -> str:
     return f"task_{uuid.uuid4().hex[:8]}"
 
 
+def _build_plan_graph(specs: list[TaskSpec]) -> PlanGraph:
+    """从 TaskSpec 列表构建 PlanGraph。Planner 和 LLMPlanner 共用。"""
+    nodes: dict[str, PlanNode] = {}
+    edges: dict[str, list[str]] = {}
+    root_ids: list[str] = []
+
+    for spec in specs:
+        node = PlanNode(spec=spec)
+        nodes[spec.id] = node
+        edges[spec.id] = list(spec.depends_on)
+        if not spec.depends_on:
+            root_ids.append(spec.id)
+
+    return PlanGraph(
+        nodes=nodes,
+        edges=edges,
+        root_ids=root_ids,
+        total_tokens_spent=0,
+        created_at=time.time(),
+    )
+
+
 # ─── 任务分解模板 ─────────────────────────────────────────────────────────
 # MVP 阶段使用静态模板。每个模板定义一组 TaskSpec，包含依赖关系。
 # Phase 2+ 会替换为 LLM 驱动的动态分解。
@@ -186,27 +208,7 @@ class Planner:
             # 验证修复 → 依赖 修复代码
             specs[4].depends_on = [spec_ids[3]]
 
-        # 构建 PlanGraph
-        nodes: dict[str, PlanNode] = {}
-        edges: dict[str, list[str]] = {}
-        root_ids: list[str] = []
-
-        for spec in specs:
-            node = PlanNode(spec=spec)
-            nodes[spec.id] = node
-            edges[spec.id] = list(spec.depends_on)
-            if not spec.depends_on:
-                root_ids.append(spec.id)
-
-        plan = PlanGraph(
-            nodes=nodes,
-            edges=edges,
-            root_ids=root_ids,
-            total_tokens_spent=0,
-            created_at=time.time(),
-        )
-
-        return plan
+        return _build_plan_graph(specs)
 
     def _classify_task(self, task: UserTask) -> str:
         """根据任务描述和 required_tools 判断任务类型。"""
@@ -339,24 +341,5 @@ JSON:"""
         return specs
 
     def _build_graph(self, specs: list[TaskSpec]) -> PlanGraph:
-        """从 TaskSpec 列表构建 PlanGraph。"""
-        import time
-
-        nodes: dict[str, PlanNode] = {}
-        edges: dict[str, list[str]] = {}
-        root_ids: list[str] = []
-
-        for spec in specs:
-            node = PlanNode(spec=spec)
-            nodes[spec.id] = node
-            edges[spec.id] = list(spec.depends_on)
-            if not spec.depends_on:
-                root_ids.append(spec.id)
-
-        return PlanGraph(
-            nodes=nodes,
-            edges=edges,
-            root_ids=root_ids,
-            total_tokens_spent=0,
-            created_at=time.time(),
-        )
+        """从 TaskSpec 列表构建 PlanGraph（委托共享函数）。"""
+        return _build_plan_graph(specs)
