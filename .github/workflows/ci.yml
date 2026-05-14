@@ -74,7 +74,19 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
+          pip install -e .
           pip install pytest pytest-asyncio pytest-cov
+
+      - name: Verify core imports
+        env:
+          HORIZON_SEARCH_PROVIDER: mock
+          HORIZON_OFFLINE_MODE: "true"
+        run: |
+          python -c "from horizonrl.orchestration.dag_workflow import ResearchOrchestrator"
+          python -c "from horizonrl.memory.hierarchical_memory import L3EpisodicArchive"
+          python -c "from horizonrl.llm.client import LLMClient, EmbedResult"
+          python -c "from horizonrl.agent.planner import Planner, _build_plan_graph"
+          python -c "from horizonrl.agent.writer import Writer"
 
       - name: Run tests (mock mode)
         env:
