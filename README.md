@@ -2,7 +2,7 @@
 
 <div align="center">
 
-**Long-Horizon Agentic RL System for Stable 20+ Step Complex Task Execution**
+**面向 20+ 步复杂任务的稳定长时域 Agentic RL 系统**
 
 [![Python](https://img.shields.io/badge/Python-3.10+-blue.svg)](https://www.python.org/)
 [![License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
@@ -13,27 +13,29 @@
 
 ---
 
-## Overview
+## 项目概述
 
-HorizonRL-Agent is a multi-agent LLM orchestration system that enables AI agents to reliably complete complex, long-horizon research tasks (20+ steps). It decomposes a user question into a DAG of subtasks, executes them concurrently with quality verification, and automatically recovers from failures through targeted replanning — all backed by a three-tier hierarchical memory system.
+HorizonRL-Agent 是一个多智能体 LLM 编排系统，能够让 AI Agent 可靠地完成 20+ 步的复杂长时域研究任务。
+它将用户问题拆解为有向无环图 (DAG) 形式的子任务，通过并发的质量验证执行，
+并在失败时通过定向重规划自动恢复——全部由三层层次化记忆系统支撑。
 
-**Key differentiators from vanilla LangGraph/AutoGPT:**
+**与标准 LangGraph / AutoGPT 的关键区别：**
 
-| Challenge | Standard Approach | HorizonRL-Agent |
-|-----------|------------------|-----------------|
-| Context pollution over long runs | Single flat context window | L1→L2→L3 hierarchical memory with automatic compression |
-| Error cascading in multi-step tasks | Full plan rebuild on failure | 9-rule verifier diagnoses errors; replanner patches only failed nodes |
-| Tool failures blocking pipeline | Blocking retries with fixed backoff | Circuit breaker + fast-fail on network errors + mock fallback |
-| Sequential tool execution | One tool at a time | asyncio.gather concurrent execution per worker |
+| 挑战 | 常规做法 | HorizonRL-Agent |
+|------|---------|-----------------|
+| 长流程中的上下文污染 | 单一扁平上下文窗口 | L1→L2→L3 层次化记忆，自动压缩 |
+| 多步任务中的错误级联 | 失败即重建全部计划 | 9 规则验证器诊断错误，重规划仅修补失败节点 |
+| 工具失败阻塞流水线 | 阻塞重试 + 固定退避 | 熔断器 + 快速失败 + Mock 兜底 |
+| 工具串行执行效率低 | 一次一个工具 | asyncio.gather 多 Worker 并发执行 |
 
-## Quick Start
+## 快速开始
 
-### Prerequisites
+### 环境要求
 
 - Python 3.10+
-- No GPU required (RL training phase only)
+- 无需 GPU（仅 RL 训练阶段需要）
 
-### Installation
+### 安装
 
 ```bash
 git clone https://github.com/TheodoreYang6/HorizonRL-Agent.git
@@ -41,48 +43,48 @@ cd HorizonRL-Agent
 pip install -e .
 ```
 
-### Run (offline mode — zero API dependencies)
+### 离线运行（零 API 依赖）
 
 ```bash
-# End-to-end research pipeline with mock tools
-python examples/02_simple_agent.py "Transformer attention mechanism"
+# 端到端研究流水线（Mock 工具）
+python examples/02_simple_agent.py "Transformer注意力机制"
 
-# Full multi-agent DAG pipeline
-python examples/04_multi_agent_research.py "Latest advances in RL for LLM training"
+# 完整多智能体 DAG 流水线
+python examples/04_multi_agent_research.py "RL在LLM训练中的最新进展"
 ```
 
-Both commands produce structured research reports with evidence citations.
+两条命令均会生成带有证据引用的结构化研究报告。
 
-### Run with LLM (recommended)
+### LLM 驱动运行（推荐）
 
 ```bash
 cp .env.example .env
-# Add your API key: DEEPSEEK_API_KEY=sk-xxx
+# 填入你的 API Key: DEEPSEEK_API_KEY=sk-xxx
 
-python examples/04_multi_agent_research.py --llm "Your research question"
+python examples/04_multi_agent_research.py --llm "你的研究问题"
 ```
 
-Output: `reports/{session_id}/final_answer.md` + `debug_report.md`
+输出路径：`reports/{session_id}/final_answer.md` + `debug_report.md`
 
-### Web Interface
+### Web 界面
 
 ```bash
 python examples/05_web_agent.py
-# Open http://localhost:8080
+# 浏览器打开 http://localhost:8080
 ```
 
-Three modes: Auto | Chat (instant) | Deep (full agent pipeline with SSE progress streaming)
+三种模式：自动 (Auto) | 即时对话 (Chat) | 深度研究 (Deep，带 SSE 进度推送)
 
-## Architecture
+## 系统架构
 
 ```
-UserTask (natural language)
+UserTask (自然语言)
     │
     ▼
-Planner / LLMPlanner ──→ PlanGraph (DAG of TaskSpecs)
+Planner / LLMPlanner ──→ PlanGraph (DAG 子任务图)
     │
     ▼
-ResearchOrchestrator (LangGraph StateGraph, 6-node state machine)
+ResearchOrchestrator (LangGraph StateGraph, 6 节点状态机)
     │
     │   plan_task → mark_ready → execute_batch → verify_batch
     │                                        │
@@ -90,187 +92,187 @@ ResearchOrchestrator (LangGraph StateGraph, 6-node state machine)
     │                continue             replan   done/deadlock
     │                     │                  │           │
     │                mark_ready          replan      finalize
-    │                (next round)    (local repair)  (Writer)
+    │                (下一轮)         (局部修复)     (Writer)
     │                     │                  │           │
     │                     └──────────────────┘           │
     │                                                    ▼
     │                                                   END
     │
-    ├──→ Verifier (rule/hybrid/llm) → VerificationResult
-    │       └──→ Replanner → PlanPatch (RETRY/ADD/REMOVE/REORDER)
+    ├──→ Verifier (规则/LLM/混合) → VerificationResult
+    │       └──→ Replanner → PlanPatch (重试/追加/移除/重排)
     │
     ├──→ HierarchicalMemory
-    │       L1 (FIFO window) → L2 (semantic summary) → L3 (FAISS retrieval)
+    │       L1 (FIFO 窗口) → L2 (语义摘要) → L3 (FAISS 检索)
     │
-    ├──→ TrajectoryLogger (async JSONL, 30 event types)
+    ├──→ TrajectoryLogger (异步 JSONL, 30 种事件类型)
     │
     └──→ Writer
-            ├── UserAnswerWriter → final_answer.md (end-user)
-            └── DebugReportRenderer → debug_report.md (developers)
+            ├── UserAnswerWriter → final_answer.md (面向用户)
+            └── DebugReportRenderer → debug_report.md (面向开发者)
 ```
 
-## Features
+## 核心特性
 
-### 1. Verifier-Guided Local Replanning
+### 1. 验证器引导的局部重规划
 
-Instead of rebuilding the entire plan on failure, the system:
-- Runs 9 rule-based checks (<0.1ms) on every task result
-- Classifies errors into 9 types (EMPTY_RESULT, CODE_ERROR, OFF_TOPIC, HALLUCINATION, etc.)
-- Applies targeted patches: RETRY (rewrite query), ADD (supplement task), REMOVE (skip), REORDER
+失败时不重建整个计划，而是：
+- 对每个任务结果执行 **9 道规则检查**（<0.1ms）
+- 将错误分类为 **9 种类型**（空结果、代码错误、偏题、幻觉等）
+- 施加**定向补丁**：RETRY（重写查询）、ADD（补充任务）、REMOVE（跳过）、REORDER（重排）
 
 ```
-ErrorType → PatchType mapping:
-  EMPTY_RESULT  → RETRY   |  CODE_ERROR   → RETRY
-  TOOL_ERROR    → RETRY   |  OFF_TOPIC    → RETRY
-  INCOMPLETE    → ADD     |  HALLUCINATION → RETRY
-  FACTUAL_ERROR → RETRY   |  OTHER        → RETRY
+ErrorType → PatchType 映射:
+  EMPTY_RESULT   → RETRY   |  CODE_ERROR    → RETRY
+  TOOL_ERROR     → RETRY   |  OFF_TOPIC     → RETRY
+  INCOMPLETE     → ADD     |  HALLUCINATION → RETRY
+  FACTUAL_ERROR  → RETRY   |  OTHER         → RETRY
 ```
 
-### 2. Three-Tier Hierarchical Memory
+### 2. 三层层次化记忆
 
-| Tier | Type | Capacity | Behavior |
-|------|------|----------|----------|
-| L1 | Recent working window | 8K tokens (FIFO) | Auto-compresses to L2 at 80% fullness |
-| L2 | Semantic summaries | 50 entries | Template/LLM compression, FIFO eviction |
-| L3 | Episodic archive | Unlimited | FAISS n-gram vector search + keyword hybrid retrieval |
+| 层级 | 类型 | 容量 | 行为 |
+|------|------|------|------|
+| L1 | 近期工作窗口 | 8K tokens (FIFO) | 80% 满载时自动压缩至 L2 |
+| L2 | 语义摘要 | 50 条 | 模板/LLM 压缩, FIFO 淘汰 |
+| L3 | 情景档案 | 无限 | FAISS n-gram 向量检索 + 关键词混合召回 |
 
-L3 uses deterministic MD5-based n-gram hashing (no embedding API required), with optional upgrade to real embeddings via `LLMClient.embed()`.
+L3 使用确定性 MD5 n-gram 哈希（零依赖，无需 Embedding API），可按需升级为真实 Embedding。
 
-### 3. Async Multi-Agent DAG Orchestration
+### 3. 异步多智能体 DAG 编排
 
-- LangGraph StateGraph with conditional routing and deadlock detection
-- All task execution and verification use `asyncio.gather` for parallelism
-- `asyncio.Semaphore` controls max concurrent workers
-- `asyncio.wait` with timeout prevents batch-level stalls (120s cap)
-- Circuit breaker prevents repeated calls to failing tools
+- LangGraph StateGraph + 条件路由 + 死锁检测
+- 所有任务执行和验证均采用 `asyncio.gather` 并行化
+- `asyncio.Semaphore` 控制最大并发 Worker 数
+- `asyncio.wait` + 超时（120s）防止批次级卡死
+- 熔断器阻止对故障工具的重复调用
 
-### 4. Multi-Endpoint Tool Layer
+### 4. 多端点工具层
 
-Every tool has multiple fallback paths and concurrent endpoint racing:
+每个工具均配备多重回退路径与并发端点竞速：
 
-| Tool | Strategy |
-|------|----------|
-| Web Search | 5-backend auto-fallback: Bocha → Brave → DDGS → Wikipedia → Mock. AUTO mode races backends concurrently. |
-| Arxiv Search | 3 endpoints raced concurrently (first success wins, 8s cap). Mock paper generation on total failure. |
-| Code Execution | Auto-detects natural language input and generates relevant code examples. 15s timeout with safe globals. |
+| 工具 | 策略 |
+|------|------|
+| Web 搜索 | 5 后端自动回退：Bocha → Brave → DDGS → Wikipedia → Mock。AUTO 模式并发竞速 |
+| Arxiv 搜索 | 3 端点并发竞速（首个成功即返回，8s 上限）。全部失败时生成 Mock 论文 |
+| 代码执行 | 自动识别自然语言输入并生成代码示例。15s 超时 + 安全全局变量沙箱 |
 
-### 5. Trajectory Logging
+### 5. 轨迹日志
 
-30 event types logged asynchronously (JSONL) across the full pipeline — from `plan.start` to `session.end`. Provides the data foundation for ablation studies and RL training.
+全流水线 30 种事件类型，异步 JSONL 记录——从 `plan.start` 到 `session.end`。为消融实验和 RL 训练提供数据基础。
 
-### 6. Dual-Mode Report Generation
+### 6. 双模式报告生成
 
-- **UserAnswerWriter**: Clean markdown reports with provenance citations, zero debug info
-- **DebugReportRenderer**: Full task DAG, verification details, tool call traces, memory stats
+- **UserAnswerWriter**：清爽 Markdown 报告，含来源引用，零调试信息
+- **DebugReportRenderer**：完整任务 DAG、验证详情、工具调用追踪、记忆统计
 
-## Demos
+## Demo 一览
 
-| # | File | Description | Requires API |
-|---|------|-------------|--------------|
-| 02 | `02_simple_agent.py` | Minimal end-to-end pipeline | No |
-| 03 | `03_llm_demo.py` | LLM connection test + intelligent planning | Yes |
-| 04 | `04_multi_agent_research.py` | **Flagship**: 6-stage pipeline, dual report output | Optional |
-| 05 | `05_web_agent.py` | Web chat interface (dual routes + SSE + download) | Auto-detect |
-| 06 | `06_ablation_study.py` | Ablation experiment framework (5 configs + stress injection) | No |
-| 07 | `07_benchmark.py` | Benchmark evaluation (20 questions, 5 categories) | No |
+| # | 文件 | 描述 | 需要 API |
+|---|------|------|----------|
+| 02 | `02_simple_agent.py` | 最小端到端流水线 | 否 |
+| 03 | `03_llm_demo.py` | LLM 连接测试 + 智能规划 | 是 |
+| 04 | `04_multi_agent_research.py` | **旗舰 Demo**：6 阶段流水线，双报告输出 | 可选 |
+| 05 | `05_web_agent.py` | Web 对话界面（双路由 + SSE + 下载） | 自动检测 |
+| 06 | `06_ablation_study.py` | 消融实验框架（5 配置 + 压力注入） | 否 |
+| 07 | `07_benchmark.py` | Benchmark 评测（20 题，5 类别） | 否 |
 
-## Project Structure
+## 项目结构
 
 ```
 src/horizonrl/
-├── schemas/           Data protocol (4 files, 16 data structures, 1061 lines)
+├── schemas/           数据协议 (4 文件, 16 数据结构, 1061 行)
 │   ├── task.py        TaskSpec · PlanGraph · PlanNode · PlanPatch · UserTask
 │   ├── result.py      StepResult · VerificationResult · EvidenceItem · ToolCall
-│   ├── event.py       TrajectoryEvent · TrajectorySession · EventType (30 types)
+│   ├── event.py       TrajectoryEvent · TrajectorySession · EventType (30 种)
 │   └── report.py      FinalReport · ReportSection · CitationMap · ReportMetadata
 │
-├── config/            Configuration (1 file, 686 lines)
+├── config/            配置管理 (1 文件, 686 行)
 │   └── settings.py    Pydantic V2: LLMConfig · MemoryConfig · AgentRuntimeConfig
 │
-├── tools/             Tool layer (5 files, ~950 lines)
-│   ├── manager.py     ToolManager: timeout/retry/circuit-breaker/stats
-│   ├── web_search.py  Multi-backend with concurrent racing (Bocha/Brave/DDGS/Wikipedia/Mock)
-│   ├── arxiv_search.py  Multi-endpoint concurrent race + mock fallback
-│   ├── code_execution.py  Sandbox with auto code generation from descriptions
-│   └── mock.py        Mock tools for offline/CI use
+├── tools/             工具层 (5 文件, ~950 行)
+│   ├── manager.py     ToolManager: 超时/重试/熔断/统计
+│   ├── web_search.py  多后端并发竞速 (Bocha/Brave/DDGS/Wikipedia/Mock)
+│   ├── arxiv_search.py  多端点并发竞速 + Mock 回退
+│   ├── code_execution.py  沙箱执行 + 自然语言自动生成代码
+│   └── mock.py        离线/CI 用 Mock 工具
 │
-├── llm/               LLM client (1 file, 185 lines)
-│   └── client.py      chat() + embed() · OpenAI-compatible · DeepSeek verified
+├── llm/               LLM 客户端 (1 文件, 185 行)
+│   └── client.py      chat() + embed() · OpenAI 兼容 · DeepSeek 已验证
 │
-├── agent/             Agent logic (5 files, ~2000 lines)
-│   ├── planner.py     Planner (2 templates) + LLMPlanner (LLM-driven DAG decomposition)
-│   ├── worker.py      AgentWorker (async execution + evidence extraction)
-│   ├── verifier.py    RuleEngine (9 rules) + Verifier (rule/llm/hybrid)
-│   ├── replanner.py   Replanner (9 strategies) + LLMReplanner
-│   └── writer.py      UserAnswerWriter + DebugReportRenderer (dual output)
+├── agent/             Agent 逻辑 (5 文件, ~2000 行)
+│   ├── planner.py     Planner (2 类模板) + LLMPlanner (LLM 驱动 DAG 拆解)
+│   ├── worker.py      AgentWorker (异步执行 + 证据提取)
+│   ├── verifier.py    RuleEngine (9 规则) + Verifier (规则/LLM/混合)
+│   ├── replanner.py   Replanner (9 策略) + LLMReplanner
+│   └── writer.py      UserAnswerWriter + DebugReportRenderer (双模式输出)
 │
-├── orchestration/     Orchestration (1 file, ~850 lines)
-│   └── dag_workflow.py  ResearchOrchestrator: LangGraph 6-node state machine
+├── orchestration/     编排层 (1 文件, ~850 行)
+│   └── dag_workflow.py  ResearchOrchestrator: LangGraph 6 节点状态机
 │
-├── memory/            Memory (1 file, ~750 lines)
+├── memory/            记忆系统 (1 文件, ~750 行)
 │   └── hierarchical_memory.py  L1RecentWindow · L2SemanticSummary · L3EpisodicArchive
 │
-└── logging/           Logging (1 file, 411 lines)
-    └── trajectory_logger.py  Async JSONL · TrajectorySession · 5 analysis tools
+└── logging/           日志系统 (1 文件, 411 行)
+    └── trajectory_logger.py  异步 JSONL · TrajectorySession · 5 种分析工具
 ```
 
-## Running Tests
+## 运行测试
 
 ```bash
-pytest tests/ -v                          # All 325 tests
-pytest tests/test_dag_workflow.py -v      # Orchestration layer (28 tests)
-pytest tests/test_memory.py -v            # Memory layer (63 tests)
-pytest tests/test_replanner.py -v         # Replanner strategies (51 tests)
+pytest tests/ -v                          # 全部 325 项测试
+pytest tests/test_dag_workflow.py -v      # 编排层 (28 项)
+pytest tests/test_memory.py -v            # 记忆层 (63 项)
+pytest tests/test_replanner.py -v         # 重规划策略 (51 项)
 ```
 
-## Configuration
+## 配置说明
 
-Configuration uses a three-level merge: **code defaults → YAML file → environment variables**.
+配置采用**三级合并**机制：代码默认值 → YAML 文件 → 环境变量。
 
 ```bash
-# .env file
-DEEPSEEK_API_KEY=sk-your-key          # LLM inference
-DASHSCOPE_API_KEY=sk-your-key         # Embedding (optional)
-BOCHA_API_KEY=sk-your-key             # Web search (optional, China-friendly)
+# .env 文件
+DEEPSEEK_API_KEY=sk-your-key          # LLM 推理
+DASHSCOPE_API_KEY=sk-your-key         # Embedding (可选)
+BOCHA_API_KEY=sk-your-key             # Web 搜索 (可选, 国内友好)
 
-# Environment variable overrides (double-underscore = nesting)
+# 环境变量覆盖 (双下划线 = 嵌套层级)
 HORIZON_LLM__MODEL=deepseek-chat
 HORIZON_AGENT__MAX_STEPS=20
 HORIZON_MEMORY__L1_MAX_TOKENS=6000
 HORIZON_SEARCH_PROVIDER=auto
 ```
 
-Config files: `configs/default.yaml` (production) | `configs/dev.yaml` (development) | `configs/eval.yaml` (evaluation)
+配置文件：`configs/default.yaml` (生产) | `configs/dev.yaml` (开发) | `configs/eval.yaml` (评测)
 
-## Tech Stack
+## 技术栈
 
-| Layer | Technology |
-|-------|-----------|
-| Orchestration | LangGraph StateGraph (6-node DAG, conditional routing) |
-| Async | Python asyncio (gather, Semaphore, Queue, wait, wait_for) |
-| LLM | OpenAI-compatible SDK (DeepSeek, OpenAI, vLLM, any compatible API) |
-| Embedding | MD5 n-gram feature hashing (zero-dependency, deterministic) — upgradeable to Embedding API |
-| Vector Search | FAISS IndexFlatL2 + L2 distance threshold + keyword re-ranking |
-| Config | Pydantic V2 with three-level merge (code → YAML → env) |
-| Logging | Async JSONL with background writer task |
-| Testing | pytest + pytest-asyncio (325 tests, 10 test modules) |
+| 层级 | 技术选型 |
+|------|---------|
+| 编排 | LangGraph StateGraph (6 节点 DAG, 条件路由) |
+| 异步 | Python asyncio (gather, Semaphore, Queue, wait, wait_for) |
+| LLM | OpenAI 兼容 SDK (DeepSeek, OpenAI, vLLM 等任意兼容 API) |
+| 向量化 | MD5 n-gram 特征哈希 (零依赖, 确定性) — 可升级至 Embedding API |
+| 向量检索 | FAISS IndexFlatL2 + L2 距离阈值 + 关键词重排序 |
+| 配置 | Pydantic V2 三级合并 (代码 → YAML → 环境变量) |
+| 日志 | 异步 JSONL + 后台写入任务 |
+| 测试 | pytest + pytest-asyncio (325 项, 10 个测试模块) |
 
-## Research
+## 研究方向
 
-This project addresses the **Long-Horizon Agent Stability** problem. Core research contributions:
+本项目聚焦**长时域 Agent 稳定性 (Long-Horizon Agent Stability)** 问题。核心研究贡献：
 
-1. **Hierarchical Memory**: L1 (working) → L2 (semantic) → L3 (episodic) with deterministic n-gram retrieval
-2. **Verifier-Guided Replanning**: 9 diagnostic rules → targeted local patches (not full replan)
-3. **Trajectory-Level Logging**: 30 event types for ablation and future RL training
-4. **Evidence-Provenance Chain**: Every claim in the final report is traceable to its search source
+1. **层次化记忆**：L1 (工作记忆) → L2 (语义记忆) → L3 (情景记忆)，确定性 n-gram 检索
+2. **验证器引导重规划**：9 条诊断规则 → 定向局部补丁（非全量重建）
+3. **轨迹级日志**：30 种事件类型，支撑消融实验与 RL 训练
+4. **证据溯源链**：最终报告中的每个结论均可追溯至其搜索来源
 
-Target venue: AAAI / IJCAI / ACL Findings 2027
+目标期刊/会议：AAAI / IJCAI / ACL Findings 2027
 
-## License
+## 许可证
 
-MIT License — see [LICENSE](LICENSE)
+MIT License — 详见 [LICENSE](LICENSE)
 
-## Citation
+## 引用
 
 ```bibtex
 @misc{horizonrl-agent,
@@ -284,4 +286,4 @@ MIT License — see [LICENSE](LICENSE)
 
 ---
 
-*HorizonRL-Agent v0.2.0 — 325 tests · 7 demos · 16K lines · Phase 2 Complete*
+*HorizonRL-Agent v0.2.0 — 325 项测试 · 7 个 Demo · 16K 行代码 · Phase 2 完成*
