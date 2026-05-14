@@ -68,9 +68,18 @@ CLAUDE.local.md
 API_key.txt
 1.txt
 
+# Development process files (not for public repo)
+DEVELOPMENT_PLAN.md
+SYSTEM_MANUAL.md
+paper_outline.md
+chatgpt_suggestion.md
+examples/01_async_demo.py
+tests/manual/
+.githooks/
+.coverage
+
 # Temp files
 resume_text.txt
 resume_text_new.txt
 scripts/update_resume.py
 .claude/settings.local.json
-chatgpt_suggestion.md

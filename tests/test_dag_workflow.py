@@ -316,15 +316,13 @@ class TestCreateOrchestrator:
 class TestDeadlockHandling:
     @pytest.mark.asyncio
     async def test_deadlock_detected(self, orchestrator):
-        state = _make_initial_state(user_task="死锁测试", max_iterations=10)
+        """死锁检测：迭代次数超过上限应设置 error。"""
+        state = _make_initial_state(user_task="死锁测试", max_iterations=0)
         plan = PlanGraph()
-        dep_spec = TaskSpec(id="t_dep", name="失败依赖", description="会失败",
-                            tool_names=["unregistered_tool"])
-        child_spec = TaskSpec(id="t_child", name="子任务", description="依赖前一步",
-                              tool_names=[], depends_on=["t_dep"])
+        dep_spec = TaskSpec(id="t_dep", name="根任务", description="正常任务",
+                            tool_names=["web_search"])
         plan.nodes["t_dep"] = PlanNode(spec=dep_spec, status=TaskStatus.PENDING)
-        plan.nodes["t_child"] = PlanNode(spec=child_spec, status=TaskStatus.PENDING)
-        plan.edges["t_child"] = ["t_dep"]
+        plan.edges["t_dep"] = []
         plan.root_ids = ["t_dep"]
         state["plan"] = plan
 

@@ -183,7 +183,7 @@ class TestReplanPatchGeneration:
         assert patch.patch_type == PatchType.ADD
         assert patch.new_spec is not None
         assert "_sup_" in patch.new_spec.id
-        assert patch.new_spec.depends_on == ["t2"]
+        assert patch.new_spec.depends_on == []  # 补充任务独立，不依赖失败父任务
         assert "补充" in patch.new_spec.name
 
     def test_retry_spec_includes_verifier_suggestions(self, replanner, simple_graph):
@@ -309,7 +309,7 @@ class TestApplyPatch:
         )
         replanner.apply_patch(simple_graph, patch)
         assert "t2_sup_02" in simple_graph.edges
-        assert simple_graph.edges["t2_sup_02"] == ["t2"]
+        assert simple_graph.edges["t2_sup_02"] == []  # 补充任务独立，无依赖
 
     def test_apply_remove_marks_skipped(self, replanner, simple_graph):
         patch = PlanPatch(
@@ -466,8 +466,8 @@ class TestFullReplanCycle:
         new_id = patch.new_spec.id
         assert new_id in simple_graph.nodes
         assert simple_graph.nodes[new_id].status == TaskStatus.PENDING
-        # 新节点依赖 t2
-        assert simple_graph.edges[new_id] == ["t2"]
+        # 补充任务独立，不依赖失败父任务
+        assert simple_graph.edges[new_id] == []
 
     def test_multiple_retries_then_skip(self, replanner, simple_graph):
         """超过最大重试次数后不再生成补丁。"""
@@ -552,7 +552,7 @@ class TestLLMReplanner:
             simple_graph.nodes["t3"].spec, vr
         )
         assert "_sup_" in spec.id
-        assert spec.depends_on == ["t3"]
+        assert spec.depends_on == []  # 补充任务独立，不依赖失败父任务
         assert "补充" in spec.name
         assert "运行实验" in spec.context or "运行实验" in spec.description
 
@@ -596,7 +596,7 @@ class TestEdgeCases:
         assert simple_graph.nodes["t3"].spec.retry_count == 3
 
     def test_add_patch_downstream_dependencies(self, replanner, simple_graph):
-        """ADD 补丁正确更新下游依赖。"""
+        """ADD 补丁添加为独立任务，不修改下游依赖。"""
         # t2 依赖 t1，我们对 t2 做 ADD
         new_spec = TaskSpec(id="t2_sup_test", name="补充",
                             description="补充 t2",
@@ -608,9 +608,9 @@ class TestEdgeCases:
             new_spec=new_spec,
         )
         replanner.apply_patch(simple_graph, patch)
-        # 新节点的 spec.depends_on 应包含 t2
+        # 新节点为独立任务，不依赖失败父任务
         new_node = simple_graph.nodes["t2_sup_test"]
-        assert "t2" in new_node.spec.depends_on
+        assert new_node.spec.depends_on == []
 
     def test_empty_graph_replan_returns_none(self, replanner, failed_vr):
         patch = replanner.replan(failed_vr, PlanGraph(), "t1")

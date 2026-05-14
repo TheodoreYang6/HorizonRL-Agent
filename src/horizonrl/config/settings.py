@@ -79,18 +79,18 @@ class LLMConfig(BaseModel):
     """单个 LLM 端点的配置。
 
     Examples:
-        >>> cfg = LLMConfig(provider="openai", model="gpt-4o")
+        >>> cfg = LLMConfig(provider="deepseek", model="deepseek-chat")
         >>> cfg.model
-        'gpt-4o'
+        'deepseek-chat'
     """
 
     provider: str = Field(
-        default="openai",
-        description="LLM 提供商: openai | anthropic | vllm",
+        default="deepseek",
+        description="LLM 提供商: deepseek | openai | anthropic | dashscope | vllm",
     )
     model: str = Field(
-        default="gpt-4o",
-        description="模型名称，如 gpt-4o, claude-sonnet-4-6, qwen2.5-7b",
+        default="deepseek-chat",
+        description="模型名称，如 deepseek-chat, deepseek-reasoner, gpt-4o",
     )
     temperature: float = Field(
         default=0.3,
@@ -105,7 +105,7 @@ class LLMConfig(BaseModel):
     )
     base_url: str | None = Field(
         default=None,
-        description="自定义 API 地址。None=官方地址, http://localhost:8000/v1=vLLM",
+        description="自定义 API 地址。None=官方地址, DeepSeek=https://api.deepseek.com",
     )
     api_key: str = Field(
         default="",
@@ -210,7 +210,7 @@ class AgentRuntimeConfig(BaseModel):
         description="单次 LLM 调用超时（秒）",
     )
     tool_call_timeout: int = Field(
-        default=20,
+        default=12,
         gt=0,
         description="单次工具调用超时（秒）",
     )
@@ -268,14 +268,14 @@ class WebSearchConfig(BaseModel):
 
     engine: str = Field(default="duckduckgo", description="搜索引擎")
     max_results: int = Field(default=10, ge=1, description="最大结果数")
-    timeout: int = Field(default=20, gt=0, description="超时（秒）")
+    timeout: int = Field(default=12, gt=0, description="超时（秒）")
 
 
 class ArxivSearchConfig(BaseModel):
     """Arxiv 搜索工具配置。"""
 
     max_results: int = Field(default=20, ge=1)
-    timeout: int = Field(default=15, gt=0)
+    timeout: int = Field(default=12, gt=0)
 
 
 class CodeExecutionConfig(BaseModel):
@@ -346,7 +346,9 @@ class RootConfig(BaseModel):
     Examples:
         >>> cfg = RootConfig()
         >>> cfg.llm.model
-        'gpt-4o'
+        'deepseek-chat'
+        >>> cfg.llm.provider
+        'deepseek'
         >>> cfg.memory.l1_max_tokens
         8000
         >>> cfg.agent.worker_semaphore_limit
@@ -354,12 +356,18 @@ class RootConfig(BaseModel):
     """
 
     # ── 子配置 ──
-    llm: LLMConfig = Field(default_factory=LLMConfig)
+    llm: LLMConfig = Field(default_factory=lambda: LLMConfig(
+        base_url="https://api.deepseek.com",
+    ))
     lightweight_llm: LLMConfig = Field(default_factory=lambda: LLMConfig(
-        provider="openai", model="gpt-4o-mini", temperature=0.0, max_tokens=1024,
+        model="deepseek-chat", temperature=0.0, max_tokens=1024,
+        base_url="https://api.deepseek.com",
     ))
     embedding: LLMConfig = Field(default_factory=lambda: LLMConfig(
-        provider="openai", model="text-embedding-3-small", temperature=0.0,
+        provider="dashscope",
+        model="text-embedding-v4",
+        temperature=0.0,
+        base_url="https://dashscope.aliyuncs.com/compatible-mode/v1",
     ))
     memory: MemoryConfig = Field(default_factory=MemoryConfig)
     agent: AgentRuntimeConfig = Field(default_factory=AgentRuntimeConfig)
@@ -454,26 +462,42 @@ def load_config(path: str | Path | None = None) -> RootConfig:
 
 
 def _inject_api_keys(config: RootConfig) -> RootConfig:
-    """从标准环境变量名自动注入 API Key 到对应配置。
+    """按 provider 匹配环境变量，自动注入 API Key。
 
-    支持的变量：
-      OPENAI_API_KEY    → llm.api_key, lightweight_llm.api_key, embedding.api_key
-      ANTHROPIC_API_KEY → llm.api_key (provider=anthropic 时)
+    匹配规则 (对 llm / lightweight_llm / embedding 三个槽位各自独立):
+      provider 含 "deepseek"    → DEEPSEEK_API_KEY
+      provider 含 "dashscope"   → DASHSCOPE_API_KEY
+      provider 含 "openai"      → OPENAI_API_KEY
+      provider 含 "anthropic"   → ANTHROPIC_API_KEY
+      未匹配到任何 provider      → 尝试 OPENAI_API_KEY 兜底
     """
     import os
-    openai_key = os.environ.get("OPENAI_API_KEY", "")
-    anthropic_key = os.environ.get("ANTHROPIC_API_KEY", "")
 
-    if openai_key:
-        if not config.llm.api_key:
-            config.llm.api_key = openai_key
-        if not config.lightweight_llm.api_key:
-            config.lightweight_llm.api_key = openai_key
-        if not config.embedding.api_key:
-            config.embedding.api_key = openai_key
+    _PROVIDER_KEY_MAP = {
+        "deepseek": "DEEPSEEK_API_KEY",
+        "dashscope": "DASHSCOPE_API_KEY",
+        "openai": "OPENAI_API_KEY",
+        "anthropic": "ANTHROPIC_API_KEY",
+    }
 
-    if anthropic_key and not config.llm.api_key:
-        config.llm.api_key = anthropic_key
+    api_keys = {name: os.environ.get(env_var, "")
+                for name, env_var in _PROVIDER_KEY_MAP.items()}
+
+    for slot in ("llm", "lightweight_llm", "embedding"):
+        slot_cfg = getattr(config, slot)
+        if slot_cfg.api_key:
+            continue  # 已设置，不覆盖
+
+        # 按 provider 匹配
+        provider = (slot_cfg.provider or "").lower()
+        for name, key in api_keys.items():
+            if key and name in provider:
+                slot_cfg.api_key = key
+                break
+        else:
+            # 兜底：任意可用 Key
+            if not slot_cfg.api_key and api_keys.get("openai"):
+                slot_cfg.api_key = api_keys["openai"]
 
     return config
 

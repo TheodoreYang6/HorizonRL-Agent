@@ -239,9 +239,11 @@ class PlanGraph:
         for node in self.nodes.values():
             if node.status != TaskStatus.READY:
                 continue
-            # 确认所有依赖节点都已完成
+            # 确认所有依赖节点都处于终态
             deps_satisfied = all(
-                self.nodes[dep_id].status == TaskStatus.SUCCESS
+                self.nodes[dep_id].status in (
+                    TaskStatus.SUCCESS, TaskStatus.FAILED, TaskStatus.SKIPPED
+                )
                 for dep_id in node.depends_on
             )
             if deps_satisfied:

@@ -98,12 +98,15 @@ def setup_infrastructure(use_llm: bool = False):
     # Web Search
     try:
         from horizonrl.tools.web_search import WebSearchTool
+        import os as _os
+        bocha_key = _os.getenv("BOCHA_API_KEY", "")
+        provider_label = "Bocha(国内)" if bocha_key else "DuckDuckGo"
         mgr.register("web_search", WebSearchTool())
-        print_status("tools", "WebSearch (DuckDuckGo)", "ok")
+        print_status("tools", f"WebSearch ({provider_label})", "ok")
     except Exception:
         from horizonrl.tools.mock import MockWebSearch
         mgr.register("web_search", MockWebSearch())
-        print_status("tools", "WebSearch → 模拟 (DuckDuckGo 不可用)", "warn")
+        print_status("tools", "WebSearch → 模拟", "warn")
 
     # Arxiv Search
     try:
@@ -420,7 +423,7 @@ async def stage4_generate_report(
     ctx = memory.get_context()
     writer_mode = "llm" if llm_client is not None else "template"
     writer = Writer(mode=writer_mode, llm_client=llm_client,
-                    config=WriterConfig(export_dir="summaries"))
+                    config=WriterConfig(export_dir="reports"))
 
     # 生成两份报告: final_answer.md (用户) + debug_report.md (开发者)
     final_path, debug_path = await writer.write_reports(

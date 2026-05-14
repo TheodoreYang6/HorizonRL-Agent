@@ -317,7 +317,7 @@ class L3EpisodicArchive:
     SIM_THRESHOLD: float = 1.35
 
     def __init__(self, index_path: str = ".memory/episodic_index",
-                 embedding_dim: int = 1536):
+                 embedding_dim: int = 1024):
         self.index_path = index_path
         self.embedding_dim = embedding_dim
         self._entries: list[dict] = []         # {text, metadata, ts}
@@ -342,7 +342,18 @@ class L3EpisodicArchive:
         return self._ngram_embed(text)
 
     def _embed_sync(self, text: str) -> list[float]:
-        """同步生成文本向量（n-gram 特征哈希）。"""
+        """同步生成文本向量。有 API client 时尝试同步调用，否则 n-gram。"""
+        if self._llm_client is not None and hasattr(self._llm_client, "embed"):
+            import asyncio
+            try:
+                loop = asyncio.get_running_loop()
+                # 在已有 event loop 中无法用 asyncio.run()，用 n-gram 兜底
+                return self._ngram_embed(text)
+            except RuntimeError:
+                try:
+                    return asyncio.run(self._embed(text))
+                except Exception:
+                    pass
         return self._ngram_embed(text)
 
     def _ngram_embed(self, text: str) -> list[float]:
@@ -375,10 +386,29 @@ class L3EpisodicArchive:
 
     # ── 写入 ────────────────────────────────────────────────────────────
 
-    def archive(self, text: str, metadata: dict | None = None) -> None:
-        """归档一条经验到 L3。"""
+    async def archive(self, text: str, metadata: dict | None = None) -> None:
+        """归档一条经验到 L3。优先用 embedding API，不可用时回退 n-gram。"""
         import numpy as np
-        vec = self._embed_sync(text)
+        vec = await self._embed(text)
+        vec_np = np.array([vec], dtype=np.float32)
+
+        if self._index is None:
+            self._build_index(vec_np)
+        else:
+            self._index.add(vec_np)
+
+        self._entries.append({
+            "text": text,
+            "vector": vec,
+            "metadata": metadata or {},
+            "ts": time.time(),
+        })
+        self._dirty = True
+
+    def archive_sync(self, text: str, metadata: dict | None = None) -> None:
+        """同步归档（n-gram 嵌入，无需 API）。用于不支持异步的场景。"""
+        import numpy as np
+        vec = self._ngram_embed(text)
         vec_np = np.array([vec], dtype=np.float32)
 
         if self._index is None:
@@ -724,9 +754,13 @@ class HierarchicalMemory:
 
     # ── L3 接口 ───────────────────────────────────────────────────────────
 
-    def archive_to_l3(self, text: str, metadata: dict | None = None) -> None:
-        """归档到 L3 经验记忆。"""
-        self._l3.archive(text, metadata or {})
+    async def archive_to_l3(self, text: str, metadata: dict | None = None) -> None:
+        """归档到 L3 经验记忆（异步，优先用 embedding API）。"""
+        await self._l3.archive(text, metadata or {})
+
+    def archive_to_l3_sync(self, text: str, metadata: dict | None = None) -> None:
+        """归档到 L3 经验记忆（同步，仅 n-gram 嵌入）。"""
+        self._l3.archive_sync(text, metadata or {})
 
     def retrieve_l3(self, query: str, top_k: int = 5) -> list[str]:
         """从 L3 检索 (向量 + 关键词混合)。"""

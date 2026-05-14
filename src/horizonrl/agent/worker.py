@@ -84,20 +84,37 @@ class AgentWorker:
                 worker_id=self.worker_id,
             )
 
-        # 逐个调用工具（MVP 串行，Phase 2+ 可按需并行）
-        for tool_name in task.tool_names:
-            tc = await self._call_tool(tool_name, task)
+        # 并行调用所有工具 — asyncio.gather 并发，不等前一个完成
+        if len(task.tool_names) == 1:
+            # 单工具：直接调用，避免 gather 开销
+            tc = await self._call_tool(task.tool_names[0], task)
             tool_calls.append(tc)
-
             if tc.is_success:
                 all_outputs.append(tc.output)
-                # 从工具输出中提取证据
                 evidence = self._extract_evidence(
-                    tool_name, tc.output, task.id, task.description
+                    task.tool_names[0], tc.output, task.id, task.description
                 )
                 evidence_items.extend(evidence)
             else:
-                all_outputs.append(f"[{tool_name}] 失败: {tc.error}")
+                all_outputs.append(f"[{task.tool_names[0]}] 失败: {tc.error}")
+        else:
+            # 多工具：asyncio.gather 并发执行，哪个先完成就先处理
+            async def _call_one(name: str):
+                tc = await self._call_tool(name, task)
+                output_fragment = ""
+                ev: list[EvidenceItem] = []
+                if tc.is_success:
+                    output_fragment = tc.output
+                    ev = self._extract_evidence(name, tc.output, task.id, task.description)
+                else:
+                    output_fragment = f"[{name}] 失败: {tc.error}"
+                return tc, output_fragment, ev
+
+            batch = await asyncio.gather(*[_call_one(n) for n in task.tool_names])
+            for tc, output_fragment, ev in batch:
+                tool_calls.append(tc)
+                all_outputs.append(output_fragment)
+                evidence_items.extend(ev)
 
         elapsed = time.monotonic() - start
         total_tokens = sum(tc.tokens_used for tc in tool_calls)
@@ -140,8 +157,10 @@ class AgentWorker:
 
     def _build_params(self, tool_name: str, task: TaskSpec) -> dict:
         """根据工具类型构建合适的参数。"""
-        if tool_name in ("web_search", "arxiv_search"):
-            return {"query": task.description}
+        if tool_name == "web_search":
+            return {"query": task.description, "num_results": 10}
+        elif tool_name == "arxiv_search":
+            return {"query": task.description, "max_results": 10}
         elif tool_name == "code_execution":
             return {"code": task.description}
         elif tool_name == "retrieval":
@@ -261,12 +280,20 @@ class AgentWorker:
 
     @staticmethod
     def _try_parse_json(output: str):
-        """尝试将字符串解析为 JSON，失败时返回原始字符串。"""
+        """尝试将字符串解析为结构化数据。
+
+        先尝试 JSON，失败后用 ast.literal_eval 兼容 Python 字面量格式
+        （如 ToolManager 用 str() 转换的 list[dict]）。都失败则返回原字符串。
+        """
+        import ast
         import json
         try:
             return json.loads(output)
         except (json.JSONDecodeError, TypeError):
-            return output
+            try:
+                return ast.literal_eval(output)
+            except (ValueError, SyntaxError):
+                return output
 
 
 async def execute_workers(

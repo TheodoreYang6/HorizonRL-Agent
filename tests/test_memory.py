@@ -411,13 +411,13 @@ class TestHierarchicalMemory:
 
     def test_archive_to_l3(self):
         mem = HierarchicalMemory()
-        mem.archive_to_l3("重要经验", {"task": "搜索"})
+        mem.archive_to_l3_sync("重要经验", {"task": "搜索"})
         assert mem.get_stats()["l3_count"] == 1
 
     def test_retrieve_l3(self):
         mem = HierarchicalMemory()
-        mem.archive_to_l3("Transformer注意力机制分析结果")
-        mem.archive_to_l3("LLaMA架构研究")
+        mem.archive_to_l3_sync("Transformer注意力机制分析结果")
+        mem.archive_to_l3_sync("LLaMA架构研究")
         results = mem.retrieve_l3("Transformer")
         assert len(results) == 1
         assert "注意力" in results[0]
@@ -542,21 +542,21 @@ class TestMemoryEdgeCases:
 class TestL3EpisodicArchive:
     def test_archive_and_keyword_search(self):
         l3 = L3EpisodicArchive()
-        l3.archive("Transformer注意力机制在NLP中广泛应用", {"task": "搜索"})
-        l3.archive("Python asyncio是异步编程的核心库")
-        l3.archive("量子计算使用量子比特进行并行计算")
+        l3.archive_sync("Transformer注意力机制在NLP中广泛应用", {"task": "搜索"})
+        l3.archive_sync("Python asyncio是异步编程的核心库")
+        l3.archive_sync("量子计算使用量子比特进行并行计算")
         results = l3.search("Transformer")
         assert len(results) > 0
         assert any("Transformer" in r for r in results)
 
     def test_search_no_match(self):
         l3 = L3EpisodicArchive()
-        l3.archive("测试内容")
+        l3.archive_sync("测试内容")
         assert l3.search("不存在的关键词") == []
 
     def test_clear(self):
         l3 = L3EpisodicArchive()
-        l3.archive("测试", {"key": "val"})
+        l3.archive_sync("测试", {"key": "val"})
         assert l3.count == 1
         l3.clear()
         assert l3.count == 0
@@ -564,8 +564,8 @@ class TestL3EpisodicArchive:
     def test_save_and_load(self, tmp_path):
         """测试 L3 持久化往返。"""
         l3 = L3EpisodicArchive(index_path=str(tmp_path / "test_index"))
-        l3.archive("Transformer注意力机制最新进展")
-        l3.archive("LLaMA架构中的RoPE位置编码")
+        l3.archive_sync("Transformer注意力机制最新进展")
+        l3.archive_sync("LLaMA架构中的RoPE位置编码")
         l3.save()
 
         # 加载
@@ -578,15 +578,15 @@ class TestL3EpisodicArchive:
     def test_count(self):
         l3 = L3EpisodicArchive()
         assert l3.count == 0
-        l3.archive("a")
-        l3.archive("b")
+        l3.archive_sync("a")
+        l3.archive_sync("b")
         assert l3.count == 2
 
     def test_vector_search_falls_back_to_keyword(self):
         """FAISS 不可用时回退关键词检索。"""
         l3 = L3EpisodicArchive()
-        l3.archive("第一条重要经验")
-        l3.archive("第二条无关内容")
+        l3.archive_sync("第一条重要经验")
+        l3.archive_sync("第二条无关内容")
         # 关键词检索
         results = l3._keyword_search("重要", 5)
         assert len(results) == 1
@@ -595,9 +595,9 @@ class TestL3EpisodicArchive:
     def test_hierarchical_memory_l3_integration(self):
         """HierarchicalMemory 的 L3 接口正常工作。"""
         mem = HierarchicalMemory()
-        mem.archive_to_l3("Transformer经验1")
-        mem.archive_to_l3("asyncio经验2")
-        mem.archive_to_l3("量子计算经验3")
+        mem.archive_to_l3_sync("Transformer经验1")
+        mem.archive_to_l3_sync("asyncio经验2")
+        mem.archive_to_l3_sync("量子计算经验3")
 
         stats = mem.get_stats()
         assert stats["l3_count"] == 3

@@ -192,20 +192,31 @@ class ToolManager:
         self._circuit_breakers: dict[str, CircuitBreaker] = {}
 
         # 默认超时和重试配置
-        self._default_timeout: float = 20.0
-        self._default_max_retries: int = 2
-        self._circuit_failure_threshold: int = 5
-        self._circuit_cooldown_seconds: float = 60.0
+        self._default_timeout: float = 12.0
+        self._default_max_retries: int = 1
+        self._circuit_failure_threshold: int = 3
+        self._circuit_cooldown_seconds: float = 30.0
 
         if tools_config is not None:
             self._apply_config(tools_config)
 
     def _apply_config(self, tools_config) -> None:
-        """从 ToolsConfig 读取配置。"""
+        """从 ToolsConfig 读取配置，为已注册工具设置超时。
+
+        各工具超时优先用工具自身配置，未配置时统一用 web_search.timeout。
+        """
         self._default_timeout = float(
-            getattr(getattr(tools_config, "web_search", None), "timeout", 20)
+            getattr(getattr(tools_config, "web_search", None), "timeout", 12)
         )
         self._default_max_retries = 2
+        # 存储各工具类型的超时，供 call() 按工具名查询
+        self._tool_timeouts: dict[str, float] = {}
+        for tool_type in ("web_search", "arxiv_search", "code_execution", "retrieval"):
+            tool_cfg = getattr(tools_config, tool_type, None)
+            if tool_cfg is not None:
+                self._tool_timeouts[tool_type] = float(
+                    getattr(tool_cfg, "timeout", self._default_timeout)
+                )
 
     # ── 工具注册 ────────────────────────────────────────────────────────
 
@@ -262,7 +273,11 @@ class ToolManager:
         try:
             parsed = _json.loads(raw_output)
         except (_json.JSONDecodeError, TypeError):
-            parsed = raw_output
+            import ast
+            try:
+                parsed = ast.literal_eval(raw_output)
+            except (ValueError, SyntaxError):
+                parsed = raw_output
 
         if isinstance(parsed, list):
             for entry in parsed:
@@ -361,9 +376,9 @@ class ToolManager:
                 stats.timeout_calls += 1
                 elapsed = time.monotonic() - start
 
-                if attempt < max_retries:
-                    backoff = 2 ** attempt
-                    await asyncio.sleep(backoff)
+                # 超时不退避：超时通常是服务端无响应而非过载，退避无意义。
+                # 最多重试 1 次（立即重试），避免长时间阻塞。
+                if attempt < min(max_retries, 1):
                     continue
 
                 cb.on_failure()
@@ -373,16 +388,28 @@ class ToolManager:
                     output="",
                     elapsed=elapsed,
                     error=f"[{ToolErrorType.TIMEOUT.value}] 超时 ({timeout}s)，"
-                          f"已重试 {max_retries} 次",
+                          f"已重试 {attempt} 次",
                 )
 
             except Exception as exc:
                 stats.total_calls += 1
                 elapsed = time.monotonic() - start
 
-                # 分类错误类型
                 error_type = self._classify_error(exc)
 
+                # 网络/连接错误不重试 — DNS/连接拒绝是持久性错误
+                if error_type == ToolErrorType.NETWORK:
+                    cb.on_failure()
+                    stats.failure_calls += 1
+                    return ToolCall(
+                        tool_name=tool_name,
+                        input=request.params,
+                        output="",
+                        elapsed=elapsed,
+                        error=f"[{error_type.value}] {exc}",
+                    )
+
+                # 限流/鉴权/未知错误可重试（带指数退避）
                 if attempt < max_retries:
                     backoff = 2 ** attempt
                     await asyncio.sleep(backoff)

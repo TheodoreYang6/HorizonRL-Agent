@@ -70,7 +70,7 @@ class TestWriterConfig:
         cfg = WriterConfig()
         assert cfg.enable_llm_writer is True
         assert cfg.default_author == "HorizonRL-Agent"
-        assert cfg.export_dir == "summaries"
+        assert cfg.export_dir == "reports"
         assert cfg.max_evidence_items == 10
         assert cfg.include_debug_stats is False
 
@@ -85,10 +85,15 @@ class TestWriterConfig:
 
 
 class TestMockWarning:
-    def test_majority_mock(self):
+    def test_all_mock_triggers_warning(self):
+        evidence = [{"is_mock": True}, {"is_mock": True}]
+        result = _mock_warning(evidence)
+        assert "Mock" in result
+
+    def test_partial_mock_no_warning(self):
         evidence = [{"is_mock": True}, {"is_mock": True}, {"is_mock": False}]
         result = _mock_warning(evidence)
-        assert "Mock Demo" in result
+        assert result == ""  # 只有全部是 mock 才触发
 
     def test_no_mock(self):
         evidence = [{"is_mock": False}, {"is_mock": False}]
@@ -181,15 +186,24 @@ class TestUserAnswerWriter:
         assert "Token" not in report
 
     def test_mock_data_shows_warning(self):
-        """mock 数据占比高时显示 Mock Demo 提示。"""
+        """全部 mock 数据时显示 Mock 提示。"""
         w = UserAnswerWriter()
         mock_ev = [
             {"type": "web", "content": "mock内容1", "is_mock": True},
             {"type": "arxiv", "content": "mock内容2", "is_mock": True},
-            {"type": "web", "content": "真实内容", "is_mock": False},
         ]
         report = w._template_write("测试", mock_ev)
-        assert "Mock Demo" in report
+        assert "Mock" in report
+
+    def test_partial_real_no_mock_warning(self):
+        """有真实数据时不显示整体 Mock 警告。"""
+        w = UserAnswerWriter()
+        mixed_ev = [
+            {"type": "web", "content": "mock内容", "is_mock": True},
+            {"type": "web", "content": "真实内容", "is_mock": False},
+        ]
+        report = w._template_write("测试", mixed_ev)
+        assert "离线 Mock 模式" not in report
 
     def test_empty_evidence(self):
         w = UserAnswerWriter()

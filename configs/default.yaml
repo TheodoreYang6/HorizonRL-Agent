@@ -8,31 +8,35 @@
 
 # ── LLM 配置 ───────────────────────────────────────────────────────────
 llm:
-  provider: openai              # openai | anthropic | vllm
-  model: gpt-4o                 # 推理主模型
-  temperature: 0.3              # 0.0=确定性, 1.0=随机性（Agent 推荐低温度）
+  provider: deepseek             # deepseek | openai | anthropic | vllm
+  model: deepseek-chat             # 推理主模型 (DeepSeek-V3)
+  temperature: 0.3               # 0.0=确定性, 1.0=随机性（Agent 推荐低温度）
   max_tokens: 4096
-  base_url: null                # null=官方API, 自定义=vLLM地址
+  base_url: https://api.deepseek.com  # DeepSeek OpenAI 兼容端点
 
 # 轻量模型（用于 L2 摘要压缩、简单分类）
 lightweight_llm:
-  provider: openai
-  model: gpt-4o-mini
+  provider: deepseek
+  model: deepseek-chat             # DeepSeek-V3 兼顾摘要（无独立轻量模型）
   temperature: 0.0
   max_tokens: 1024
+  base_url: https://api.deepseek.com
 
 # Embedding 模型（用于 L3 向量检索）
+# 默认使用阿里云百炼 text-embedding-v4（OpenAI 兼容协议）
+# 也可切换到 OpenAI text-embedding-3-small
 embedding:
-  provider: openai
-  model: text-embedding-3-small
-  dimensions: 1536              # text-embedding-3-small 默认维度
+  provider: dashscope
+  model: text-embedding-v4
+  base_url: https://dashscope.aliyuncs.com/compatible-mode/v1
+  dimensions: 1024              # text-embedding-v4 输出 1024 维
 
 # ── 分层记忆配置 ──────────────────────────────────────────────────────
 memory:
-  l1_max_tokens: 8000           # L1 最近窗口的 token 上限
-  l2_summary_model: gpt-4o-mini # L2 语义压缩用的模型
+  l1_max_tokens: 10000           # L1 最近窗口的 token 上限
+  l2_summary_model: deepseek-chat   # L2 语义压缩用的模型
   l2_max_entries: 50            # L2 最多保留的语义摘要数量
-  l3_embedding_model: text-embedding-3-small
+  l3_embedding_model: text-embedding-v4
   l3_index_path: .memory/episodic_index  # FAISS 索引文件路径
   retrieval_top_k: 5            # 检索返回的最大条目数
   auto_compress_threshold: 0.8  # L1 使用率超过此值时自动触发压缩
@@ -43,7 +47,7 @@ agent:
   worker_semaphore_limit: 3     # 同时执行的 Worker 最大数量
   task_timeout: 120             # 单个子任务超时（秒）
   llm_call_timeout: 30          # 单次 LLM 调用超时（秒）
-  tool_call_timeout: 20         # 单次工具调用超时（秒）
+  tool_call_timeout: 12         # 单次工具调用超时（秒）
   max_retries_per_task: 3       # 单个子任务最多重试次数
   replan_max_iterations: 5      # 单次任务最多重规划次数（防死循环）
 
@@ -58,12 +62,14 @@ logging:
 # ── 工具配置 ──────────────────────────────────────────────────────────
 tools:
   web_search:
-    engine: duckduckgo          # duckduckgo | serpapi | google
+    engine: auto                  # 搜索后端: auto | bocha | brave | duckduckgo
+                                  #   auto = Bocha(需Key) → Brave(需Key) → DDGS → Wikipedia → Mock
+                                  #   bocha 国内推荐(需 BOCHA_API_KEY)，被墙需代理
     max_results: 10
-    timeout: 20
+    timeout: 12
   arxiv_search:
     max_results: 20
-    timeout: 15
+    timeout: 12
   code_execution:
     sandbox: subprocess         # subprocess | docker
     timeout: 30

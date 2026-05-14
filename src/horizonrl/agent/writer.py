@@ -43,7 +43,7 @@ class WriterConfig:
     enable_llm_writer: bool = True
     default_author: str = "HorizonRL-Agent"
     include_debug_stats: bool = False
-    export_dir: str = "summaries"
+    export_dir: str = "reports"
     max_evidence_items: int = 10
 
 
@@ -58,10 +58,10 @@ def _mock_warning(evidence_items: list) -> str:
         1 for e in evidence_items
         if (getattr(e, "is_mock", False) or (isinstance(e, dict) and e.get("is_mock", False)))
     )
-    if mock_count > len(evidence_items) * 0.5:
+    if mock_count == len(evidence_items):
         return (
-            "> ⚠️ 当前为 Mock Demo 模式，大部分内容为流程演示数据，"
-            "非真实检索结果。配置 API Key 后可使用真实搜索。\n\n"
+            "> ⚠️ 当前为离线 Mock 模式，所有搜索结果均为模拟数据。"
+            "配置 API Key 后可使用真实搜索。\n\n"
         )
     return ""
 
@@ -453,7 +453,7 @@ class Writer:
         meta = ReportMetadata(
             author=self.config.default_author,
             mode="user",
-            used_mock_data=(mock_count > len(evidence) * 0.5),
+            used_mock_data=(mock_count == len(evidence) and len(evidence) > 0),
             llm_writer_used=(self.mode == "llm" and self.llm is not None),
         )
 
@@ -483,7 +483,7 @@ class Writer:
             session_id=session_id,
             author=self.config.default_author,
             mode="user",
-            used_mock_data=(mock_count > len(evidence) * 0.5),
+            used_mock_data=(mock_count == len(evidence) and len(evidence) > 0),
             llm_writer_used=(self.mode == "llm" and self.llm is not None),
         )
 

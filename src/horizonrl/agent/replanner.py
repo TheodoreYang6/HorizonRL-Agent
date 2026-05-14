@@ -241,7 +241,7 @@ class Replanner:
             name=f"[补充] {original.name}",
             description=desc,
             tool_names=list(original.tool_names),
-            depends_on=[original.id],
+            depends_on=[],  # 补充任务独立执行，不依赖失败父任务
             priority=TaskPriority.P1,
             context=context,
             retry_count=0,
@@ -281,23 +281,14 @@ class Replanner:
         node.error_msg = ""
 
     def _apply_add(self, graph: PlanGraph, patch: PlanPatch) -> None:
-        """ADD: 在目标节点之后插入新节点。"""
+        """ADD: 添加独立补充任务，不修改现有依赖。"""
         if patch.new_spec is None:
             return
         new_node = PlanNode(spec=patch.new_spec, status=TaskStatus.PENDING)
-        # 设置新节点对目标节点的依赖
-        if patch.target_node_id not in new_node.spec.depends_on:
-            new_node.spec.depends_on.append(patch.target_node_id)
         graph.nodes[patch.new_spec.id] = new_node
-        graph.edges[patch.new_spec.id] = [patch.target_node_id]
-
-        # 找到原目标节点的下游节点，让它们也依赖新节点
-        for nid, deps in graph.edges.items():
-            if patch.target_node_id in deps and nid != patch.new_spec.id:
-                node = graph.nodes.get(nid)
-                if node and patch.new_spec.id not in node.spec.depends_on:
-                    node.spec.depends_on.append(patch.new_spec.id)
-                    graph.edges[nid].append(patch.new_spec.id)
+        graph.edges[patch.new_spec.id] = list(patch.new_spec.depends_on)
+        if not patch.new_spec.depends_on:
+            graph.root_ids.append(patch.new_spec.id)
 
     def _apply_remove(self, graph: PlanGraph, patch: PlanPatch) -> None:
         """REMOVE: 将节点标记为 SKIPPED。"""
@@ -477,7 +468,7 @@ class LLMReplanner(Replanner):
         depends_on = (
             list(original.depends_on)
             if patch_type == PatchType.RETRY
-            else [original.id]
+            else []  # 补充任务独立执行，不依赖失败父任务
         )
 
         return TaskSpec(

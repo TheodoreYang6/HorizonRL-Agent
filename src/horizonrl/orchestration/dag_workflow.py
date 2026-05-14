@@ -58,9 +58,13 @@ LangGraph DAG 编排 —— Agent 工作流的主状态机（v2: Verifier+Replan
 from __future__ import annotations
 
 import asyncio
+import dataclasses
 import inspect
 import time
+import types as _types
+import typing
 import uuid
+from enum import Enum
 from pathlib import Path
 
 # ─── LangGraph 工作流状态 ────────────────────────────────────────────────
@@ -77,7 +81,7 @@ from pathlib import Path
 #     max_iterations: 防止死循环的硬上限
 #     final_output:  最终报告文本（Writer v2 生成）
 #     error:         错误信息（死锁或异常时设置）
-from typing import Literal
+from typing import Annotated, Literal, TypedDict, Union
 
 from langgraph.graph import END, StateGraph
 
@@ -88,145 +92,114 @@ from horizonrl.agent.worker import AgentWorker
 from horizonrl.agent.writer import Writer
 from horizonrl.memory.hierarchical_memory import HierarchicalMemory
 from horizonrl.schemas.result import (
-    ErrorType,
-    EvidenceItem,
     StepResult,
-    ToolCall,
     VerificationResult,
 )
 from horizonrl.schemas.task import (
     PatchType,
+    PlanGraph,
     PlanNode,
     TaskStatus,
     UserTask,
 )
 
 
+def _dict_merge(a: dict, b: dict) -> dict:
+    """Reducer：合并两个 dict（LangGraph Annotated 累加器）。"""
+    return {**a, **b}
+
+
+class WorkflowState(TypedDict):
+    """LangGraph 工作流状态 TypedDict（v2: Phase 2 类型安全升级）。
+
+    Annotated 字段使用 _dict_merge reducer 支持节点间增量累加；
+    普通字段遵循默认 replace 语义（节点返回新值即替换）。
+    """
+
+    user_task: str
+    session_id: str
+    plan: PlanGraph | None
+    results: Annotated[dict[str, dict], _dict_merge]  # 累加：结果永不删除
+    verifications: dict[str, dict]  # 替换：重规划时需要删除旧验证记录
+    iteration: int
+    replan_count: int
+    max_iterations: int
+    final_output: str
+    error: str
+    started_at: float
+
+
 def _make_initial_state(
     user_task: str = "",
     max_iterations: int = 10,
-) -> dict:
-    """创建初始工作流状态（纯 dict，兼容 LangGraph checkpoint 序列化）。"""
-    return {
-        "user_task": user_task,
-        "session_id": "",
-        "plan": None,
-        "results": {},
-        "verifications": {},
-        "iteration": 0,
-        "replan_count": 0,
-        "max_iterations": max_iterations,
-        "final_output": "",
-        "error": "",
-        "started_at": time.time(),
-    }
-
-
-def _step_result_to_dict(r: StepResult) -> dict:
-    """将 StepResult 转为 JSON-可序列化的纯 dict。"""
-    return {
-        "task_id": r.task_id,
-        "success": r.success,
-        "output": r.output,
-        "evidence": [
-            {
-                "content": e.content,
-                "source": e.source,
-                "source_type": e.source_type,
-                "relevance_score": e.relevance_score,
-                "retrieved_at": e.retrieved_at,
-                "provider": e.provider,
-                "search_query": e.search_query,
-                "is_mock": e.is_mock,
-            }
-            for e in r.evidence
-        ],
-        "tool_calls": [
-            {
-                "tool_name": tc.tool_name,
-                "input": tc.input,
-                "output": tc.output,
-                "elapsed": tc.elapsed,
-                "error": tc.error,
-                "tokens_used": tc.tokens_used,
-            }
-            for tc in r.tool_calls
-        ],
-        "tokens_used": r.tokens_used,
-        "elapsed": r.elapsed,
-        "error": r.error,
-        "worker_id": r.worker_id,
-    }
-
-
-def _dict_to_step_result(d: dict) -> StepResult:
-    """从纯 dict 恢复 StepResult。"""
-    return StepResult(
-        task_id=d.get("task_id", ""),
-        success=d.get("success", False),
-        output=d.get("output", ""),
-        evidence=[
-            EvidenceItem(
-                content=e.get("content", ""),
-                source=e.get("source", ""),
-                source_type=e.get("source_type", ""),
-                relevance_score=e.get("relevance_score", 0.0),
-                retrieved_at=e.get("retrieved_at", 0.0),
-                provider=e.get("provider", ""),
-                search_query=e.get("search_query", ""),
-                is_mock=e.get("is_mock", False),
-            )
-            for e in d.get("evidence", [])
-        ],
-        tool_calls=[
-            ToolCall(
-                tool_name=tc.get("tool_name", ""),
-                input=tc.get("input", {}),
-                output=tc.get("output", ""),
-                elapsed=tc.get("elapsed", 0.0),
-                error=tc.get("error", ""),
-                tokens_used=tc.get("tokens_used", 0),
-            )
-            for tc in d.get("tool_calls", [])
-        ],
-        tokens_used=d.get("tokens_used", 0),
-        elapsed=d.get("elapsed", 0.0),
-        error=d.get("error", ""),
-        worker_id=d.get("worker_id", ""),
+) -> WorkflowState:
+    """创建初始工作流状态。"""
+    return WorkflowState(
+        user_task=user_task,
+        session_id="",
+        plan=None,
+        results={},
+        verifications={},
+        iteration=0,
+        replan_count=0,
+        max_iterations=max_iterations,
+        final_output="",
+        error="",
+        started_at=time.time(),
     )
 
 
-def _verification_to_dict(vr: VerificationResult) -> dict:
-    """将 VerificationResult 序列化为 dict。"""
-    return {
-        "pass_": vr.pass_,
-        "score": vr.score,
-        "error_type": vr.error_type.value,
-        "feedback": vr.feedback,
-        "evidence_gaps": vr.evidence_gaps,
-        "suggested_actions": vr.suggested_actions,
-        "tokens_used": vr.tokens_used,
-        "elapsed": vr.elapsed,
-    }
+def _to_dict(obj):
+    """递归序列化 dataclass/enum/list/dict 为 JSON 兼容的纯 Python 结构。
+
+    基于 dataclasses.fields() 自动遍历所有字段，新增字段无需手动同步。
+    """
+    if dataclasses.is_dataclass(obj):
+        return {f.name: _to_dict(getattr(obj, f.name)) for f in dataclasses.fields(obj)}
+    if isinstance(obj, Enum):
+        return obj.value
+    if isinstance(obj, list):
+        return [_to_dict(item) for item in obj]
+    if isinstance(obj, dict):
+        return {k: _to_dict(v) for k, v in obj.items()}
+    return obj
 
 
-def _dict_to_verification(d: dict) -> VerificationResult:
-    """从 dict 恢复 VerificationResult。"""
-    error_str = d.get("error_type", "none")
-    try:
-        error_type = ErrorType(error_str)
-    except ValueError:
-        error_type = ErrorType.NONE
-    return VerificationResult(
-        pass_=d.get("pass_", False),
-        score=d.get("score", 0.0),
-        error_type=error_type,
-        feedback=d.get("feedback", ""),
-        evidence_gaps=d.get("evidence_gaps", []),
-        suggested_actions=d.get("suggested_actions", []),
-        tokens_used=d.get("tokens_used", 0),
-        elapsed=d.get("elapsed", 0.0),
-    )
+def _from_dict(cls: type, data: dict):
+    """从 dict 反序列化为 dataclass 实例。
+
+    通过 typing.get_type_hints() 解析字段类型（含嵌套 dataclass 和枚举），
+    递归重建完整对象图。
+    """
+    hints = typing.get_type_hints(cls)
+    kwargs: dict[str, object] = {}
+    for f in dataclasses.fields(cls):
+        key = f.name
+        if key not in data:
+            continue
+        kwargs[key] = _convert_field(data[key], hints.get(key))
+    return cls(**kwargs)
+
+
+def _convert_field(value, field_type):
+    """按目标类型递归转换字段值，处理 Union/Enum/dataclass/list[dataclass]。"""
+    if value is None or field_type is None:
+        return value
+    origin = getattr(field_type, "__origin__", None)
+    args = getattr(field_type, "__args__", ())
+    # Optional[T] = Union[T, None]
+    if origin in (_types.UnionType, Union):
+        for arg in args:
+            if arg is not type(None):  # noqa: E721
+                return _convert_field(value, arg)
+        return value
+    if isinstance(field_type, type) and issubclass(field_type, Enum):
+        return field_type(value)
+    if dataclasses.is_dataclass(field_type):
+        return _from_dict(field_type, value)
+    if origin is list and args and dataclasses.is_dataclass(args[0]):
+        return [_from_dict(args[0], item) for item in value]
+    return value
 
 
 # ─── 路由决策类型 ────────────────────────────────────────────────────────
@@ -266,6 +239,7 @@ class ResearchOrchestrator:
         verifier: Verifier | None = None,
         replanner: Replanner | None = None,
         memory: HierarchicalMemory | None = None,
+        embedding_client=None,  # LLMClient for embedding (default: None = n-gram fallback)
     ):
         self.planner = planner
         self.tool_manager = tool_manager
@@ -278,12 +252,16 @@ class ResearchOrchestrator:
         self.memory = memory or HierarchicalMemory()
         self.writer = Writer(mode="template")
 
+        # 注入 embedding client 到 L3 经验归档（启用真实向量检索）
+        if embedding_client is not None:
+            self.memory.set_embedding_client(embedding_client)
+
         # 构建并编译 LangGraph 状态图
         self._graph = self._build_graph()
 
     # ── 公共 API ────────────────────────────────────────────────────────
 
-    async def run(self, user_task: str) -> dict:
+    async def run(self, user_task: str) -> WorkflowState:
         """执行完整的研究工作流。
 
         Args:
@@ -320,7 +298,7 @@ class ResearchOrchestrator:
         Returns:
             编译后的 CompiledStateGraph，可直接 ainvoke(initial_state, config)。
         """
-        builder = StateGraph(dict)
+        builder = StateGraph(WorkflowState)
 
         # 节点注册
         builder.add_node("plan_task", self._plan_task)
@@ -372,136 +350,172 @@ class ResearchOrchestrator:
 
     # ── 节点实现 ─────────────────────────────────────────────────────────
 
-    async def _plan_task(self, state: dict) -> dict:
+    async def _plan_task(self, state: WorkflowState) -> WorkflowState:
         """plan_task 节点：用户任务 → PlanGraph。"""
-        if state.get("plan") is not None:
+        if state["plan"] is not None:
             # 已有 plan（如从 checkpoint 恢复），确保 session_id 存在
-            sid = state.get("session_id") or f"session_{uuid.uuid4().hex[:12]}"
+            sid = state["session_id"] or f"session_{uuid.uuid4().hex[:12]}"
             return {"session_id": sid}
 
-        session_id = state.get("session_id") or f"session_{uuid.uuid4().hex[:12]}"
+        session_id = state["session_id"] or f"session_{uuid.uuid4().hex[:12]}"
         user_task = UserTask(
-            description=state.get("user_task", ""),
+            description=state["user_task"],
             max_steps=30,
             max_tokens=50_000,
         )
-        plan = self.planner.plan(user_task)
+        if inspect.iscoroutinefunction(self.planner.plan):
+            plan = await self.planner.plan(user_task)
+        else:
+            plan = self.planner.plan(user_task)
         return {"plan": plan, "session_id": session_id}
 
-    async def _mark_ready(self, state: dict) -> dict:
-        """mark_ready 节点：将依赖满足的 PENDING 节点标记为 READY。"""
-        plan = state.get("plan")
+    async def _mark_ready(self, state: WorkflowState) -> WorkflowState:
+        """mark_ready 节点：将依赖满足的 PENDING 节点标记为 READY。
+
+        同时检测死锁：若无 READY 节点但有 PENDING，说明依赖图存在死锁环
+        或所有 PENDING 节点的依赖均无法满足。
+        """
+        plan = state["plan"]
         if plan is None:
-            return {
-                "error": "plan is None",
-                "results": state.get("results", {}),
-                "verifications": state.get("verifications", {}),
-                "replan_count": state.get("replan_count", 0),
-            }
+            return {"error": "plan is None"}
 
         for node in plan.nodes.values():
             if node.status != TaskStatus.PENDING:
                 continue
             deps_satisfied = all(
-                plan.nodes[dep_id].status == TaskStatus.SUCCESS
+                plan.nodes[dep_id].status in (
+                    TaskStatus.SUCCESS, TaskStatus.FAILED, TaskStatus.SKIPPED
+                )
                 for dep_id in node.depends_on
             )
             if deps_satisfied:
                 node.status = TaskStatus.READY
 
-        # 兜底：回传已有状态，避免 LangGraph dict state merge 时丢失
-        return {
-            "plan": plan,
-            "results": state.get("results", {}),
-            "verifications": state.get("verifications", {}),
-            "replan_count": state.get("replan_count", 0),
-        }
+        # 死锁检测
+        error = state["error"]
+        if state["iteration"] >= state["max_iterations"]:
+            error = f'Deadlock: iteration {state["iteration"]} >= max {state["max_iterations"]}'
+        elif not plan.get_ready_nodes() and plan.has_pending_work():
+            pending = [
+                n for n in plan.nodes.values()
+                if n.status in (TaskStatus.PENDING, TaskStatus.READY)
+            ]
+            if pending:
+                unmet_info = []
+                for n in pending:
+                    unmet = [
+                        d for d in n.depends_on
+                        if plan.nodes[d].status != TaskStatus.SUCCESS
+                    ]
+                    unmet_info.append(f"{n.id} waiting on {unmet}")
+                error = "Deadlock: " + "; ".join(unmet_info)
 
-    async def _execute_batch(self, state: dict) -> dict:
-        """execute_batch 节点：并发执行本轮所有 READY 任务。"""
-        plan = state.get("plan")
+        return {"plan": plan, "error": error}
+
+    async def _execute_batch(self, state: WorkflowState) -> WorkflowState:
+        """execute_batch 节点：并发执行本轮所有 READY 任务。
+
+        带有整体超时保护：若批次执行超过 120 秒则取消剩余任务，
+        避免因个别工具挂起而导致整个编排管道永久阻塞。
+        使用 asyncio.wait 而非 gather+wait_for 以确保取消传播完成后再收集结果。
+        """
+        plan = state["plan"]
         if plan is None:
-            return {
-                "error": "plan is None",
-                "results": state.get("results", {}),
-                "verifications": state.get("verifications", {}),
-                "replan_count": state.get("replan_count", 0),
-            }
+            return {"error": "plan is None"}
 
         ready_nodes = plan.get_ready_nodes()
         if not ready_nodes:
-            # 防御：路由不应在此条件下到达，但保留安全返回
-            return {
-                "plan": plan,
-                "results": state.get("results", {}),
-                "verifications": state.get("verifications", {}),
-                "replan_count": state.get("replan_count", 0),
-            }
+            return {"plan": plan}
 
         sem = asyncio.Semaphore(self.semaphore_limit)
 
         async def _run_one(node: PlanNode) -> StepResult:
             node.status = TaskStatus.RUNNING
-            async with sem:
-                worker = AgentWorker(
-                    worker_id=f"wrk_{node.id}",
-                    tool_manager=self.tool_manager,
-                )
-                result = await worker.execute(node.spec)
+            try:
+                async with sem:
+                    worker = AgentWorker(
+                        worker_id=f"wrk_{node.id}",
+                        tool_manager=self.tool_manager,
+                    )
+                    result = await worker.execute(node.spec)
+                    node.finished_at = time.time()
+                    if result.success:
+                        node.status = TaskStatus.SUCCESS
+                    else:
+                        node.status = TaskStatus.FAILED
+                        node.error_msg = result.error
+                    return result
+            except asyncio.CancelledError:
                 node.finished_at = time.time()
-                if result.success:
-                    node.status = TaskStatus.SUCCESS
-                else:
-                    node.status = TaskStatus.FAILED
-                    node.error_msg = result.error
-                return result
+                node.status = TaskStatus.FAILED
+                node.error_msg = "批次执行超时"
+                return StepResult(
+                    task_id=node.spec.id,
+                    success=False,
+                    output="",
+                    evidence=[],
+                    tool_calls=[],
+                    tokens_used=0,
+                    elapsed=0.0,
+                    error="批次执行超时，任务被取消",
+                    worker_id=f"wrk_{node.id}",
+                )
 
-        batch_results = await asyncio.gather(*[_run_one(n) for n in ready_nodes])
+        # 整体批次超时：最多 120 秒（足够 2 工具 × 20s/次 × 1 重试 + 余量）
+        batch_timeout = 120.0
+        tasks = [asyncio.create_task(_run_one(n)) for n in ready_nodes]
+        done, pending = await asyncio.wait(tasks, timeout=batch_timeout)
 
-        # 累积结果 — 以 JSON 兼容 dict 存储（checkpoint 序列化要求）
-        results = dict(state.get("results", {}))
-        for r in batch_results:
-            results[r.task_id] = _step_result_to_dict(r)
+        # 取消超时任务并等待取消传播完成
+        if pending:
+            for t in pending:
+                t.cancel()
+            await asyncio.wait(pending)
+
+        # 所有任务已完成（成功/失败/取消），收集结果
+        results: dict[str, dict] = {}
+        for t in tasks:
+            try:
+                r = t.result()
+                results[r.task_id] = _to_dict(r)
+            except Exception:
+                pass
 
         return {
             "plan": plan,
             "results": results,
-            "iteration": state.get("iteration", 0) + 1,
-            "verifications": state.get("verifications", {}),
-            "replan_count": state.get("replan_count", 0),
+            "iteration": state["iteration"] + 1,
         }
 
     # ── Verifier + Replanner 节点 ────────────────────────────────────────
 
-    async def _verify_batch(self, state: dict) -> dict:
+    async def _verify_batch(self, state: WorkflowState) -> WorkflowState:
         """verify_batch 节点：对本轮执行结果进行并行验证。
 
         遍历 results 中尚未验证的任务，调用 Verifier 做质量检查。
-        使用 asyncio.gather 并行验证所有待验证任务。
+        asyncio.gather 并行验证所有待验证任务。
         """
-        plan = state.get("plan")
-        raw_results = state.get("results", {})
-        verifications = dict(state.get("verifications", {}))
-
+        plan = state["plan"]
         if plan is None:
-            return {
-                "verifications": verifications,
-                "results": state.get("results", {}),
-                "replan_count": state.get("replan_count", 0),
-            }
+            return {"error": "plan is None"}
 
-        # 收集待验证的任务
+        raw_results = state["results"]
+
+        # 收集待验证的任务（跳过已验证的）
         verify_tasks: list[tuple[str, PlanNode, StepResult]] = []
         for node_id, node in plan.nodes.items():
             result_dict = raw_results.get(node.spec.id)
             if result_dict is None:
                 continue
-            if node_id in verifications:
+            if node_id in state["verifications"]:
                 continue
             if node.status not in (TaskStatus.SUCCESS, TaskStatus.FAILED):
                 continue
-            result = _dict_to_step_result(result_dict)
+            result = _from_dict(StepResult, result_dict)
             verify_tasks.append((node_id, node, result))
+
+        if not verify_tasks:
+            return {"plan": plan}
 
         # 并行验证
         async def _verify_one(node_id: str, node: PlanNode, result: StepResult):
@@ -509,31 +523,27 @@ class ResearchOrchestrator:
             vr = await self.verifier.verify(result, task_desc)
             return node_id, node, result, vr
 
-        if verify_tasks:
-            batch = await asyncio.gather(*[
-                _verify_one(nid, node, result)
-                for nid, node, result in verify_tasks
-            ])
-            for node_id, node, result, vr in batch:
-                verifications[node_id] = _verification_to_dict(vr)
-                if vr.pass_:
-                    node.status = TaskStatus.SUCCESS
-                else:
-                    node.status = TaskStatus.FAILED
-                    node.error_msg = vr.feedback
-                self.memory.record(result, vr)
+        # 从已有验证记录开始（replace 语义要求返回完整 dict）
+        verifications = dict(state["verifications"])
+        batch = await asyncio.gather(*[
+            _verify_one(nid, node, result)
+            for nid, node, result in verify_tasks
+        ])
+        for node_id, node, result, vr in batch:
+            verifications[node_id] = _to_dict(vr)
+            if vr.pass_:
+                node.status = TaskStatus.SUCCESS
+            else:
+                node.status = TaskStatus.FAILED
+                node.error_msg = vr.feedback
+            self.memory.record(result, vr)
 
-            # L1 自动压缩（超阈值时 L1→L2）
-            self.memory.auto_compress()
+        # L1 自动压缩（超阈值时 L1→L2）
+        self.memory.auto_compress()
 
-        return {
-            "plan": plan,
-            "verifications": verifications,
-            "results": raw_results,
-            "replan_count": state.get("replan_count", 0),
-        }
+        return {"plan": plan, "verifications": verifications}
 
-    def _route_after_verify(self, state: dict) -> VerifyRoute:
+    def _route_after_verify(self, state: WorkflowState) -> VerifyRoute:
         """verify_batch 之后的调度决策。
 
         决策树：
@@ -542,8 +552,8 @@ class ResearchOrchestrator:
             3. 全部通过但有更多 pending → continue
             4. 有失败但不可重试 → deadlock
         """
-        plan = state.get("plan")
-        verifications = state.get("verifications", {})
+        plan = state["plan"]
+        verifications = state["verifications"]
 
         if plan is None:
             return "done"
@@ -551,7 +561,7 @@ class ResearchOrchestrator:
         # 收集本轮验证失败的节点
         failed_nodes: list[str] = []
         for node_id, vdict in verifications.items():
-            vr = _dict_to_verification(vdict)
+            vr = _from_dict(VerificationResult,vdict)
             if not vr.pass_:
                 node = plan.nodes.get(node_id)
                 if node and node.status == TaskStatus.FAILED:
@@ -567,7 +577,7 @@ class ResearchOrchestrator:
         can_replan_any = False
         for nid in failed_nodes:
             if self.replanner.should_replan(
-                _dict_to_verification(verifications[nid]), nid
+                _from_dict(VerificationResult,verifications[nid]), nid
             ):
                 can_replan_any = True
                 break
@@ -581,22 +591,17 @@ class ResearchOrchestrator:
 
         return "deadlock"
 
-    async def _replan(self, state: dict) -> dict:
+    async def _replan(self, state: WorkflowState) -> WorkflowState:
         """replan 节点：对验证失败的任务生成 PlanPatch 并应用。"""
-        plan = state.get("plan")
-        verifications = dict(state.get("verifications", {}))
-        replan_count = state.get("replan_count", 0)
-
+        plan = state["plan"]
         if plan is None:
-            return {
-                "error": "replan: plan is None",
-                "results": state.get("results", {}),
-                "verifications": state.get("verifications", {}),
-                "replan_count": state.get("replan_count", 0),
-            }
+            return {"error": "replan: plan is None"}
+
+        verifications = dict(state["verifications"])
+        replan_count = state["replan_count"]
 
         for node_id, vdict in list(verifications.items()):
-            vr = _dict_to_verification(vdict)
+            vr = _from_dict(VerificationResult,vdict)
             if vr.pass_:
                 continue
             if not self.replanner.should_replan(vr, node_id):
@@ -611,7 +616,6 @@ class ResearchOrchestrator:
                 self.replanner.apply_patch(plan, patch)
                 replan_count += 1
                 self.memory.record_replan()
-                # RETRY 后清除旧验证记录，让重试结果被重新验证
                 if patch.patch_type == PatchType.RETRY:
                     verifications.pop(node_id, None)
 
@@ -619,39 +623,35 @@ class ResearchOrchestrator:
             "plan": plan,
             "replan_count": replan_count,
             "verifications": verifications,
-            "results": state.get("results", {}),
         }
 
     # ── 终态节点 ──────────────────────────────────────────────────────────
 
-    async def _finalize(self, state: dict) -> dict:
+    async def _finalize(self, state: WorkflowState) -> WorkflowState:
         """finalize 节点：用 Writer v2 生成 final_answer.md + debug_report.md。
 
         Writer 不可用时回退到原始 Markdown 拼接。
         """
-        plan = state.get("plan")
-        raw_results = state.get("results", {})
-        verifications = state.get("verifications", {})
-        replan_count = state.get("replan_count", 0)
-        query = state.get("user_task", "")
-        session_id = state.get("session_id", "")
+        plan = state["plan"]
+        raw_results = state["results"]
+        verifications = state["verifications"]
+        replan_count = state["replan_count"]
+        query = state["user_task"]
+        session_id = state["session_id"]
 
         if plan is None:
             return {
                 "final_output": "No plan generated.",
-                "error": state.get("error", ""),
-                "replan_count": state.get("replan_count", 0),
-                "results": state.get("results", {}),
-                "verifications": state.get("verifications", {}),
+                "error": state["error"],
             }
 
         # 转换 dict → 对象，供 Writer 使用
-        results = {k: _dict_to_step_result(v) for k, v in raw_results.items()}
-        vr_objects = {k: _dict_to_verification(v) for k, v in verifications.items()}
+        results = {k: _from_dict(StepResult, v) for k, v in raw_results.items()}
+        vr_objects = {k: _from_dict(VerificationResult,v) for k, v in verifications.items()}
         mem_ctx = self.memory.get_context()
         stats = {
             "total_count": plan.total_count(),
-            "rounds": state.get("iteration", 0),
+            "rounds": state["iteration"],
             "total_replans": replan_count,
         }
 
@@ -669,10 +669,8 @@ class ResearchOrchestrator:
             return {
                 "final_output": final_text,
                 "plan": plan,
-                "results": raw_results,
-                "verifications": verifications,
                 "replan_count": replan_count,
-                "error": state.get("error", ""),
+                "error": state["error"],
             }
         except Exception:
             # Writer 失败或 session_id 为空时回退到原始 Markdown 拼接
@@ -680,21 +678,19 @@ class ResearchOrchestrator:
             return {
                 "final_output": final_text,
                 "plan": plan,
-                "results": raw_results,
-                "verifications": verifications,
                 "replan_count": replan_count,
-                "error": state.get("error", ""),
+                "error": state["error"],
             }
 
-    def _build_raw_final(self, state: dict) -> str:
+    def _build_raw_final(self, state: WorkflowState) -> str:
         """原始 Markdown 拼接（Writer 不可用时的 fallback）。"""
-        plan = state.get("plan")
-        raw_results = state.get("results", {})
-        verifications = state.get("verifications", {})
-        replan_count = state.get("replan_count", 0)
+        plan = state["plan"]
+        raw_results = state["results"]
+        verifications = state["verifications"]
+        replan_count = state["replan_count"]
         parts: list[str] = []
 
-        error = state.get("error", "")
+        error = state["error"]
 
         if plan is None:
             return f"No plan generated.{chr(10)}Error: {error}" if error else "No plan generated."
@@ -702,9 +698,9 @@ class ResearchOrchestrator:
         parts.append("# 研究任务执行报告\n")
         if error:
             parts.append(f"> [ERROR] 工作流异常: {error}\n")
-        parts.append(f"任务描述: {state.get('user_task', 'N/A')}\n")
+        parts.append(f'任务描述: {state["user_task"]}\n')
         parts.append(f"完成情况: {plan.success_count()}/{plan.total_count()} 子任务成功\n")
-        parts.append(f"执行轮数: {state.get('iteration', 0)}\n\n")
+        parts.append(f'执行轮数: {state["iteration"]}\n\n')
 
         for node in plan.nodes.values():
             result_dict = raw_results.get(node.spec.id)
@@ -746,51 +742,34 @@ class ResearchOrchestrator:
 
     # ── 路由逻辑 ─────────────────────────────────────────────────────────
 
-    def _route_after_mark_ready(self, state: dict) -> RouteDecision:
+    def _route_after_mark_ready(self, state: WorkflowState) -> RouteDecision:
         """mark_ready 之后的调度决策。
 
         决策树：
             1. error 已设置 → deadlock
             2. 迭代超限 → deadlock（防死循环）
             3. 有 READY 节点 → execute（继续执行）
-            4. 无 READY 但有 PENDING → deadlock（依赖无法满足）
+            4. 无 READY 但有 PENDING → deadlock（由 _mark_ready 预设 error）
             5. 全部终态 → done
         """
-        plan = state.get("plan")
-        error = state.get("error", "")
-
-        if error:
+        if state["error"]:
             return "deadlock"
 
-        if state.get("iteration", 0) >= state.get("max_iterations", 10):
+        if state["iteration"] >= state["max_iterations"]:
             return "deadlock"
 
+        plan = state["plan"]
         if plan is None:
             return "done"
 
-        ready = plan.get_ready_nodes()
-        if ready:
+        if plan.get_ready_nodes():
             return "execute"
 
         if not plan.has_pending_work():
             return "done"
 
-        pending = [
-            n for n in plan.nodes.values()
-            if n.status in (TaskStatus.PENDING, TaskStatus.READY)
-        ]
-        if pending:
-            unmet_info = []
-            for n in pending:
-                unmet = [
-                    d for d in n.depends_on
-                    if plan.nodes[d].status != TaskStatus.SUCCESS
-                ]
-                unmet_info.append(f"{n.id} waiting on {unmet}")
-            state["error"] = "Deadlock: " + "; ".join(unmet_info)
-            return "deadlock"
-
-        return "done"
+        # 无 READY 但有 PENDING → deadlock（_mark_ready 已设置 error）
+        return "deadlock"
 
 
 # ╔══════════════════════════════════════════════════════════════════════════════╗
@@ -803,6 +782,7 @@ def create_orchestrator(
     tool_manager=None,
     semaphore_limit: int = 3,
     max_iterations: int = 10,
+    embedding_client=None,
 ) -> ResearchOrchestrator:
     """工厂函数：一键创建可用的 ResearchOrchestrator。
 
@@ -813,6 +793,7 @@ def create_orchestrator(
         tool_manager: ToolManager 实例，None 则创建空的。
         semaphore_limit: 每轮最大并发数。
         max_iterations: 最大执行轮数。
+        embedding_client: LLMClient，用于 L3 向量嵌入；None 则用 n-gram 哈希 fallback。
 
     Returns:
         配置好的 ResearchOrchestrator。
@@ -825,10 +806,14 @@ def create_orchestrator(
         planner = Planner()
     if tool_manager is None:
         from horizonrl.tools.manager import ToolManager
+        from horizonrl.tools.web_search import WebSearchTool
         tool_manager = ToolManager()
+        # 自动注册 WebSearchTool — 优先 Bocha(需Key)，fallback DDGS→Wikipedia→Mock
+        tool_manager.register("web_search", WebSearchTool(provider="auto"))
     return ResearchOrchestrator(
         planner=planner,
         tool_manager=tool_manager,
         semaphore_limit=semaphore_limit,
         max_iterations=max_iterations,
+        embedding_client=embedding_client,
     )

@@ -180,7 +180,7 @@ def test_settings_exports_agent_config() -> None:
 
     cfg = AgentConfig()
     assert cfg.debug is False
-    assert cfg.llm.provider == "openai"
+    assert cfg.llm.provider == "deepseek"
 
 
 def test_hierarchical_memory_exports_class() -> None:

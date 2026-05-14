@@ -21,9 +21,9 @@ class MockWebSearch:
 
     name = "web_search"
 
-    async def search(self, query: str, max_results: int = 5) -> str:
+    async def search(self, query: str, num_results: int = 5) -> str:
         results = []
-        for i in range(1, min(max_results + 1, 4)):
+        for i in range(1, min(num_results + 1, 4)):
             results.append({
                 "title": f"[Mock] 搜索结果 {i}: {query[:30]}",
                 "url": f"https://mock-search.local/result-{i}",
@@ -71,12 +71,19 @@ class MockArxivSearch:
 
 
 class MockCodeExecution:
-    """模拟代码执行，返回预设输出。"""
+    """模拟代码执行，返回预设输出（与 CodeExecutionTool 返回格式一致）。"""
 
     name = "code_execution"
 
-    async def execute(self, code: str = "", **kwargs) -> str:
-        return json.dumps({
+    async def execute(self, code: str = "", **kwargs) -> dict:
+        if not code or not code.strip():
+            return {
+                "stdout": "",
+                "stderr": "",
+                "success": True,
+                "error": None,
+            }
+        return {
             "stdout": (
                 f"[Mock 执行] 代码长度: {len(code)} 字符\n"
                 f"输出: 代码运行成功，结果符合预期。\n"
@@ -85,7 +92,7 @@ class MockCodeExecution:
             "stderr": "",
             "success": True,
             "error": None,
-        })
+        }
 
 
 def register_mock_tools(manager) -> None:

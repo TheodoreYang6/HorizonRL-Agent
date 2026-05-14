@@ -25,44 +25,51 @@ class SearchProvider(str, Enum):
     MOCK = "mock"
 
 
-def resolve_search_provider() -> SearchProvider:
-    """根据环境变量和可用 Key 解析当前应该使用的搜索提供商。
+def resolve_search_provider(configured: str = "auto") -> SearchProvider:
+    """根据配置 + 环境变量 + 可用 Key 解析搜索提供商。
 
-    优先级 (auto 模式):
-        1. BOCHA_API_KEY 存在 → bocha
-        2. BRAVE_API_KEY 存在 → brave
-        3. 尝试 duckduckgo
-        4. 回退 mock
+    优先级：
+        1. 环境变量 HORIZON_SEARCH_PROVIDER (最高)
+        2. 构造函数参数 / YAML 配置
+        3. auto 模式：Bocha → Brave → DuckDuckGo → Wikipedia(→Mock)
+
+    Args:
+        configured: 来自 YAML 配置或构造函数的 provider 偏好。
 
     Returns:
         实际使用的 SearchProvider。
     """
-    configured = os.getenv("HORIZON_SEARCH_PROVIDER", "auto").lower()
+    # 环境变量覆盖一切
+    configured = os.getenv("HORIZON_SEARCH_PROVIDER", configured).lower()
 
     if configured == "mock":
         return SearchProvider.MOCK
-    if configured == "bocha" and os.getenv("BOCHA_API_KEY"):
-        return SearchProvider.BOCHA
-    if configured == "brave" and os.getenv("BRAVE_API_KEY"):
-        return SearchProvider.BRAVE
+    if configured == "bocha":
+        if os.getenv("BOCHA_API_KEY"):
+            return SearchProvider.BOCHA
+        return SearchProvider.DUCKDUCKGO  # 无 Key 降级
+    if configured == "brave":
+        if os.getenv("BRAVE_API_KEY"):
+            return SearchProvider.BRAVE
+        return SearchProvider.DUCKDUCKGO  # 无 Key 降级
     if configured == "duckduckgo":
         return SearchProvider.DUCKDUCKGO
 
-    if configured == "bocha":
-        return SearchProvider.DUCKDUCKGO  # 无 Key 降级
-    if configured == "brave":
-        return SearchProvider.DUCKDUCKGO  # 无 Key 降级
-
-    # auto 模式: 按优先级
+    # auto 模式: 按 Bocha → Brave → DDGS 优先级
     if os.getenv("BOCHA_API_KEY"):
         return SearchProvider.BOCHA
     if os.getenv("BRAVE_API_KEY"):
         return SearchProvider.BRAVE
-    return SearchProvider.DUCKDUCKGO  # ddgs → 失败自动到 mock
+    return SearchProvider.DUCKDUCKGO
 
 
 class WebSearchTool:
     """Multi-backend web search with automatic fallback + provider tracking.
+
+    支持通过配置文件或环境变量控制搜索后端。优先级：
+      1. 构造函数参数 provider
+      2. 环境变量 HORIZON_SEARCH_PROVIDER
+      3. auto 模式：Bocha → Brave → DuckDuckGo → Wikipedia → Mock
 
     Attributes:
         actual_provider: 实际处理本次搜索的 provider (搜索后设置)。
@@ -71,60 +78,107 @@ class WebSearchTool:
     name = "web_search"
     description = "Search the web for information on a given query."
 
-    def __init__(self, brave_api_key: str | None = None):
+    def __init__(
+        self,
+        brave_api_key: str | None = None,
+        bocha_api_key: str | None = None,
+        provider: str = "auto",
+    ):
         self.brave_api_key = brave_api_key or os.getenv("BRAVE_API_KEY", "")
-        self.bocha_api_key = os.getenv("BOCHA_API_KEY", "")
-        self.actual_provider: str = ""  # 搜索后记录实际使用的后端
+        self.bocha_api_key = bocha_api_key or os.getenv("BOCHA_API_KEY", "")
+        self._configured_provider = provider  # 来自配置文件的 provider 偏好
+        self.actual_provider: str = ""
 
     async def search(self, query: str, num_results: int = 5) -> list[dict[str, str]]:
-        """Execute web search with automatic backend fallback.
+        """Execute web search with concurrent backend race in AUTO mode.
 
-        搜索后 self.actual_provider 记录实际使用的后端。
-
-        Args:
-            query: Search query string.
-            num_results: Number of results to return (max 10).
-
-        Returns:
-            List of {'title', 'url', 'snippet', 'provider', 'is_mock'} dicts.
+        AUTO mode: all available backends fire simultaneously, first success wins.
+        Explicit provider: sequential fallback (Bocha→DDGS, Brave→DDGS, etc.)
         """
         num_results = min(num_results, 10)
-        provider = resolve_search_provider()
+        provider = resolve_search_provider(self._configured_provider)
 
-        # Backend 1: Bocha (国内推荐)
+        # ── AUTO 模式：并发竞速所有可用后端 ──
+        if provider == SearchProvider.AUTO:
+            result = await self._race_auto_backends(query, num_results)
+            if result:
+                return result
+            # AUTO race failed → Wikipedia → Mock
+            wiki = await self._try_backend(self._wikipedia_search, query, num_results, "Wikipedia")
+            if wiki:
+                self.actual_provider = "wikipedia"
+                return wiki
+            self.actual_provider = "mock"
+            return self._mock_search(query, num_results)
+
+        # ── 显式 provider 模式：顺序回退 ──
         if provider == SearchProvider.BOCHA and self.bocha_api_key:
             results = await self._try_backend(self._bocha_search, query, num_results, "Bocha")
             if results:
                 self.actual_provider = "bocha"
                 return results
 
-        # Backend 2: Brave Search API
-        if provider in (SearchProvider.BRAVE, SearchProvider.AUTO) and self.brave_api_key:
+        if provider == SearchProvider.BRAVE and self.brave_api_key:
             results = await self._try_backend(self._brave_search, query, num_results, "Brave")
             if results:
                 self.actual_provider = "brave"
                 return results
 
-        # Backend 3: DDGS (国内可用)
-        if provider in (SearchProvider.DUCKDUCKGO, SearchProvider.AUTO):
+        if provider == SearchProvider.DUCKDUCKGO:
             results = await self._try_backend(self._ddgs_search, query, num_results, "DDGS")
             if results:
                 self.actual_provider = "duckduckgo"
                 return results
 
-        # Backend 4: Wikipedia API
         results = await self._try_backend(self._wikipedia_search, query, num_results, "Wikipedia")
         if results:
             self.actual_provider = "wikipedia"
             return results
 
-        # Backend 5: Mock (always available)
         self.actual_provider = "mock"
         return self._mock_search(query, num_results)
 
+    async def _race_auto_backends(
+        self, query: str, n: int
+    ) -> list[dict[str, str]] | None:
+        """Race all available backends concurrently. First valid response wins."""
+        async def _try(name: str, fn):
+            try:
+                results = await asyncio.wait_for(fn(query, n), timeout=5.0)
+                if results and any(r.get("title") for r in results):
+                    return (name, results)
+            except Exception:
+                pass
+            return None
+
+        cors = []
+        if self.bocha_api_key:
+            cors.append(_try("bocha", self._bocha_search))
+        if self.brave_api_key:
+            cors.append(_try("brave", self._brave_search))
+        cors.append(_try("duckduckgo", self._ddgs_search))
+
+        tasks = [asyncio.create_task(c) for c in cors]
+        done, pending = await asyncio.wait(
+            tasks, timeout=6.0, return_when=asyncio.FIRST_COMPLETED
+        )
+        for t in pending:
+            t.cancel()
+
+        for t in done:
+            try:
+                pair = t.result()
+                if pair is not None:
+                    name, results = pair
+                    self.actual_provider = name
+                    return results
+            except Exception:
+                pass
+        return None
+
     async def _try_backend(self, fn, query, n, name) -> list[dict[str, str]] | None:
         try:
-            results = await asyncio.wait_for(fn(query, n), timeout=8.0)
+            results = await asyncio.wait_for(fn(query, n), timeout=6.0)
             if results and any(r.get("title") for r in results):
                 return results
         except Exception:
@@ -138,15 +192,17 @@ class WebSearchTool:
     ) -> list[dict[str, str]]:
         """Bocha API 搜索 (国内推荐)。需要 BOCHA_API_KEY。"""
         import httpx
-        async with httpx.AsyncClient(timeout=8.0) as client:
+        async with httpx.AsyncClient(timeout=6.0) as client:
             response = await client.post(
-                "https://api.bochaai.com/v1/web/search",
+                "https://api.bocha.cn/v1/web-search",
                 json={"query": query, "count": n},
                 headers={"Authorization": f"Bearer {self.bocha_api_key}"},
             )
             data = response.json()
             results = []
-            for r in data.get("data", {}).get("webPages", [])[:n]:
+            web_pages = data.get("data", {}).get("webPages", {})
+            items = web_pages.get("value", []) if isinstance(web_pages, dict) else []
+            for r in items[:n]:
                 results.append({
                     "title": r.get("name", ""),
                     "url": r.get("url", ""),
