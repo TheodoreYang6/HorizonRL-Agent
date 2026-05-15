@@ -97,6 +97,17 @@ class RuleEngine:
                 actions=["重试该子任务", "检查 Worker 日志"],
             )
 
+        # ── 2. 纯分析任务未接入 LLM ──
+        for pattern, desc in self.INCOMPLETE_PATTERNS:
+            if re.search(pattern, output, re.IGNORECASE):
+                return self._fail(
+                    ErrorType.INCOMPLETE,
+                    f"任务不完整: {desc}",
+                    score=0.2,
+                    gaps=["需要 LLM 处理纯分析任务"],
+                    actions=["接入 LLM 处理该步骤", "或改为 LLM 模式运行"],
+                )
+
         # ── 3. 空/无效输出 ──
         for pattern, desc in self.EMPTY_PATTERNS:
             if re.search(pattern, output, re.IGNORECASE):
@@ -138,7 +149,7 @@ class RuleEngine:
                     actions=["重试该工具", "检查工具配置", "使用备用工具"],
                 )
 
-        # ── 8. 无证据 ──
+        # ── 7. 无证据 ──
         if not evidence and not any(self._has_code_output(tc) for tc in tool_calls):
             return self._fail(
                 ErrorType.INCOMPLETE,
@@ -148,7 +159,7 @@ class RuleEngine:
                 actions=["重试并指定更具体的搜索参数", "检查工具返回格式"],
             )
 
-        # ── 9. 输出过短（可能无意义） ──
+        # ── 8. 输出过短（可能无意义） ──
         clean_output = output.strip()
         if len(clean_output) < 20 and evidence:
             return self._pass(
@@ -156,7 +167,7 @@ class RuleEngine:
                 feedback="输出较短但已收集证据，质量待 LLM 确认",
             )
 
-        # ── 8. 全部通过 ──
+        # ── 9. 全部通过 ──
         score = self._calc_score(result)
         return self._pass(
             score=score,

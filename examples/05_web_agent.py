@@ -1,6 +1,6 @@
 """
 =======================================================================
-05_web_agent.py — HorizonRL-Agent 对话式 Web 界面 (v2: 双路由)
+05_web_agent.py — HorizonRL-Agent 对话式 Web 界面 (v2: 共享 Service)
 =======================================================================
 
 自包含 Web 应用: aiohttp 后端 + 原生 HTML/JS 前端。
@@ -10,6 +10,11 @@
     GET  /api/report/{sid}      — 轮询深度研究报告状态
     GET  /api/download/{sid}/{kind} — 下载 final/debug markdown
 
+v2 变更 (Day 6):
+    - 改为调用共享 research_service，CLI/Web 执行路径完全一致
+    - 删除手动编排循环，走 ResearchOrchestrator 全链路
+    - 使用 resolve_mode() 统一模式判断
+
 运行:
     python examples/05_web_agent.py
     http://localhost:8080
@@ -17,7 +22,7 @@
 
 from __future__ import annotations
 
-import asyncio, json, sys, time, uuid, re, os
+import asyncio, json, sys, time, uuid, os
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
@@ -25,193 +30,92 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 from aiohttp import web
 
 from horizonrl.config.settings import load_config, RootConfig
-from horizonrl.schemas.task import UserTask, TaskStatus
-from horizonrl.schemas.event import EventType, TrajectoryEvent
-from horizonrl.agent.planner import Planner, LLMPlanner
-from horizonrl.agent.worker import AgentWorker
-from horizonrl.agent.verifier import Verifier
-from horizonrl.agent.replanner import Replanner
-from horizonrl.agent.writer import Writer, WriterConfig
-from horizonrl.tools.manager import ToolManager
-from horizonrl.memory.hierarchical_memory import HierarchicalMemory
-from horizonrl.logging.trajectory_logger import TrajectoryLogger
+from horizonrl.services.research_service import (
+    run_research_session,
+    resolve_mode,
+    SessionArtifacts,
+)
+from horizonrl.llm.client import LLMClient
 
 # ─── 全局状态 ────────────────────────────────────────────────────────────────
 
-_sessions: dict[str, dict] = {}  # session_id → {status, final_path, debug_path, query, progress_messages, current_phase}
+_sessions: dict[str, dict] = {}
 
 
-# ─── 复杂度分类器 ────────────────────────────────────────────────────────────
-
-def should_use_agent(query: str) -> bool:
-    """判断是否触发 Agent 深度研究管道。"""
-    deep_keywords = [
-        "综述", "最新进展", "对比", "比较", "分析", "调研", "深度",
-        "论文", "多来源", "优缺点", "latest", "survey", "compare",
-        "研究", "总结", "原理", "机制", "架构", "展望", "趋势",
-        "review", "advances", "comparison", "analysis",
-    ]
-    # 简单问题: 短、问定义、打招呼
-    if len(query) < 10:
-        return False
-    if any(kw in query.lower() for kw in deep_keywords):
-        return True
-    # 较长的问题 (>30字) 可能是研究类
-    if len(query) > 30:
-        return True
-    return False
-
-
-# ─── Pipeline ────────────────────────────────────────────────────────────────
+# ─── 后台 Agent 管道 ─────────────────────────────────────────────────────────
 
 async def run_agent_pipeline(session_id: str, query: str):
-    """后台执行完整 Agent 管道，完成后更新 _sessions 状态。"""
+    """后台执行 Agent 管道 — 通过共享 service 走全链路。
+
+    完成后更新 _sessions[session_id] 供前端轮询。
+    """
     _sessions[session_id]["status"] = "running"
+    _sessions[session_id]["phase"] = "starting"
+    _sessions[session_id]["progress_messages"] = []
     t0 = time.time()
 
-    # 进度消息队列 (用于轮询)
-    _sessions[session_id]["progress_messages"] = []
-    _sessions[session_id]["current_phase"] = "starting"
-
     def emit(phase: str, message: str):
-        _sessions[session_id]["current_phase"] = phase
+        _sessions[session_id]["phase"] = phase
         _sessions[session_id]["progress_messages"].append({
             "phase": phase, "message": message, "ts": time.time(),
         })
 
     try:
-        # ── 基础设施 ──
+        emit("planning", "正在加载配置与工具...")
+
+        # ── 配置 ──
         try:
-            cfg = load_config(Path("configs/dev.yaml") if Path("configs/dev.yaml").exists() else None)
+            cfg = load_config(
+                Path("configs/dev.yaml") if Path("configs/dev.yaml").exists() else None
+            )
         except Exception:
             cfg = RootConfig()
 
+        # ── LLM 客户端 ──
         llm_client = None
         if cfg.llm.api_key:
             try:
-                from horizonrl.llm.client import LLMClient
                 llm_client = LLMClient(cfg.llm)
             except Exception:
                 pass
 
-        mgr = ToolManager()
-        for cls, name in [("web_search", "WebSearchTool"), ("arxiv_search", "ArxivSearchTool"),
-                          ("code_execution", "CodeExecutionTool")]:
-            try:
-                mod = __import__(f"horizonrl.tools.{name.replace('Tool','').lower()}", fromlist=[name])
-                tool_cls = getattr(mod, name)
-                mgr.register(cls, tool_cls() if cls != "arxiv_search" else tool_cls(max_results=5))
-            except Exception:
-                from horizonrl.tools.mock import MockWebSearch, MockArxivSearch, MockCodeExecution
-                mock_map = {"web_search": MockWebSearch, "arxiv_search": MockArxivSearch,
-                           "code_execution": MockCodeExecution}
-                mgr.register(cls, mock_map[cls]())
+        emit("planning", "正在规划任务...")
 
-        memory = HierarchicalMemory(cfg.memory)
-
-        # ── 规划 ──
-        use_llm = llm_client is not None and should_use_agent(query)
-        _sessions[session_id]["phase"] = "planning"
-        emit("planning", f"正在将问题拆解为子任务...")
-        if use_llm:
-            planner = LLMPlanner(llm_client)
-            plan = await planner.plan(UserTask(description=query, max_steps=20))
-        else:
-            planner = Planner()
-            plan = planner.plan(UserTask(description=query, max_steps=20))
-
-        # ── 执行 ──
-        _sessions[session_id]["phase"] = "searching"
-        emit("searching", f"正在搜索资料 (共 {plan.total_count()} 个子任务)...")
-        verifier = Verifier(mode="rule")
-        replanner = Replanner(max_retries_per_task=3, max_total_replans=5)
-        sem = asyncio.Semaphore(3)
-        results, verifications, task_details = {}, {}, []
-        round_num = total_tool_calls = total_replans = 0
-
-        while plan.has_pending_work():
-            round_num += 1
-            for node in plan.nodes.values():
-                if node.status != TaskStatus.PENDING:
-                    continue
-                if all(plan.nodes[d].status == TaskStatus.SUCCESS for d in node.depends_on):
-                    node.status = TaskStatus.READY
-
-            ready = plan.get_ready_nodes()
-            if not ready:
-                break
-
-            async def exec_one(node):
-                node.status = TaskStatus.RUNNING
-                async with sem:
-                    worker = AgentWorker(worker_id=f"wrk_{node.id}", tool_manager=mgr)
-                    return node, await worker.execute(node.spec)
-
-            batch = await asyncio.gather(*[exec_one(n) for n in ready])
-            for node, result in batch:
-                results[result.task_id] = result
-                vr = await verifier.verify(result, node.spec)
-                verifications[node.id] = vr
-                if vr.pass_:
-                    node.status = TaskStatus.SUCCESS
-                    memory.record(result, vr)
-                else:
-                    patch = replanner.replan(vr, plan, node.id)
-                    if patch is not None:
-                        replanner.apply_patch(plan, patch)
-                        total_replans += 1
-                        memory.record_replan()
-                    else:
-                        node.status = TaskStatus.FAILED
-                        memory.record(result, vr)
-                total_tool_calls += len(result.tool_calls)
-                task_details.append({
-                    "name": node.spec.name,
-                    "tools": ", ".join(node.spec.tool_names) or "无",
-                    "status": node.status.value,
-                    "score": vr.score,
-                    "evidence": len(result.evidence),
-                })
-            memory.auto_compress()
-
-        # ── 报告 ──
-        _sessions[session_id]["phase"] = "writing"
-        emit("writing", f"正在撰写研究报告...")
-        ctx = memory.get_context()
-        writer_mode = "llm" if llm_client is not None else "template"
-        writer = Writer(mode=writer_mode, llm_client=llm_client,
-                        config=WriterConfig(export_dir="summaries"))
-
-        final_path, debug_path = await writer.write_reports(
-            query=query, session_id=session_id,
-            plan=plan, results=results, verifications=verifications,
-            memory_ctx=ctx,
-            stats={
-                "total_count": plan.total_count(),
-                "success_count": plan.success_count(),
-                "rounds": round_num,
-                "total_tool_calls": total_tool_calls,
-                "total_replans": total_replans,
-                "total_elapsed": f"{time.time() - t0:.1f}",
-            },
+        # ── 调用共享 Service (唯一执行入口) ──
+        artifacts = await run_research_session(
+            query=query,
+            mode="deep",
+            session_id=session_id,
+            llm_client=llm_client,
+            config=cfg,
+            export_dir="reports",
         )
+
+        elapsed = time.time() - t0
+
+        if artifacts.error:
+            _sessions[session_id].update({
+                "status": "failed",
+                "error": artifacts.error,
+            })
+            return
 
         # ── 完成 ──
         emit("completed", "研究报告已完成!")
-        final_text = Path(final_path).read_text(encoding="utf-8")
         _sessions[session_id].update({
             "status": "completed",
-            "final_path": final_path,
-            "debug_path": debug_path,
-            "final_answer": final_text,
+            "final_path": str(artifacts.final_answer_path),
+            "debug_path": str(artifacts.debug_report_path),
+            "final_answer": artifacts.final_answer_text,
             "process": {
-                "tasks": task_details,
-                "success": plan.success_count(),
-                "total": plan.total_count(),
-                "rounds": round_num,
-                "tool_calls": total_tool_calls,
-                "replans": total_replans,
-                "elapsed": f"{time.time() - t0:.1f}s",
+                "success": artifacts.stats.get("success_count", 0),
+                "total": artifacts.stats.get("total_count", 0),
+                "rounds": artifacts.stats.get("rounds", 0),
+                "tool_calls": artifacts.tool_calls_count,
+                "replans": artifacts.stats.get("total_replans", 0),
+                "mock_ratio": f"{artifacts.mock_ratio:.0%}",
+                "elapsed": f"{elapsed:.1f}s",
+                "provider": artifacts.used_search_provider,
             },
         })
 
@@ -219,31 +123,32 @@ async def run_agent_pipeline(session_id: str, query: str):
         _sessions[session_id].update({"status": "failed", "error": str(e)})
 
 
-# ─── LLM 对话 (chat模式) ─────────────────────────────────────────────────────
+# ─── LLM 对话 ────────────────────────────────────────────────────────────────
 
 async def run_chat(query: str) -> str:
     """直接调用 LLM 对话，不触发 Agent 管道。"""
     try:
-        cfg = load_config(Path("configs/dev.yaml") if Path("configs/dev.yaml").exists() else None)
+        cfg = load_config(
+            Path("configs/dev.yaml") if Path("configs/dev.yaml").exists() else None
+        )
     except Exception:
         cfg = RootConfig()
 
     if not cfg.llm.api_key:
-        return ("我没有配置 LLM API Key，无法进行对话。\n\n"
-                "请复制 `.env.example` 为 `.env` 并填入你的 DeepSeek 或 OpenAI Key。\n\n"
-                "当前可以：输入学术/研究类问题自动触发 Agent 离线研究管道。")
+        return (
+            "我没有配置 LLM API Key，无法进行对话。\n\n"
+            "请复制 `.env.example` 为 `.env` 并填入你的 DeepSeek 或 OpenAI Key。\n\n"
+            "当前可以：输入学术/研究类问题自动触发 Agent 离线研究管道。"
+        )
 
     try:
-        from horizonrl.llm.client import LLMClient
         client = LLMClient(cfg.llm)
         result = await client.chat(
             query,
             system_prompt="你是一个友好的AI助手。用简洁流畅的中文回答。",
             max_tokens=1000,
         )
-        if result.is_success:
-            return result.content
-        return f"LLM 调用失败: {result.error}"
+        return result.content if result.is_success else f"LLM 调用失败: {result.error}"
     except Exception as e:
         return f"LLM 错误: {e}"
 
@@ -258,12 +163,7 @@ async def handle_index(request: web.Request) -> web.Response:
 
 
 async def handle_api_chat(request: web.Request) -> web.Response:
-    """POST /api/chat — 统一对话入口。
-    入参: {"message": "...", "mode": "auto|chat|deep"}
-    返回:
-      chat模式: {"mode":"chat", "answer":"..."}
-      deep模式: {"mode":"agent", "session_id":"...", "status":"queued"}
-    """
+    """POST /api/chat — 统一对话入口。"""
     body = await request.json()
     message = body.get("message", "").strip()
     mode = body.get("mode", "auto")
@@ -271,31 +171,23 @@ async def handle_api_chat(request: web.Request) -> web.Response:
     if not message or len(message) > 500:
         return web.json_response({"error": "无效问题"}, status=400)
 
-    # mode=chat: 直接对话
-    if mode == "chat":
-        answer = await run_chat(message)
-        return web.json_response({"mode": "chat", "answer": answer},
-                                dumps=lambda o: json.dumps(o, ensure_ascii=False))
+    resolved = resolve_mode(message, mode)
 
-    # mode=deep: 强制深度研究
-    if mode == "deep":
-        sid = f"session_{uuid.uuid4().hex[:12]}"
-        _sessions[sid] = {"status": "queued", "phase": "", "query": message}
-        asyncio.create_task(run_agent_pipeline(sid, message))
-        return web.json_response({"mode": "agent", "session_id": sid, "status": "queued"},
-                                dumps=lambda o: json.dumps(o, ensure_ascii=False))
-
-    # mode=auto: 自动判断
-    if should_use_agent(message):
-        sid = f"session_{uuid.uuid4().hex[:12]}"
-        _sessions[sid] = {"status": "queued", "phase": "", "query": message}
-        asyncio.create_task(run_agent_pipeline(sid, message))
-        return web.json_response({"mode": "agent", "session_id": sid, "status": "queued"},
-                                dumps=lambda o: json.dumps(o, ensure_ascii=False))
-    else:
+    if resolved == "chat":
         answer = await run_chat(message)
-        return web.json_response({"mode": "chat", "answer": answer},
-                                dumps=lambda o: json.dumps(o, ensure_ascii=False))
+        return web.json_response(
+            {"mode": "chat", "answer": answer},
+            dumps=lambda o: json.dumps(o, ensure_ascii=False),
+        )
+
+    # deep 模式: 启动后台 Agent 管道
+    sid = f"session_{uuid.uuid4().hex[:12]}"
+    _sessions[sid] = {"status": "queued", "phase": "", "query": message}
+    asyncio.create_task(run_agent_pipeline(sid, message))
+    return web.json_response(
+        {"mode": "agent", "session_id": sid, "status": "queued"},
+        dumps=lambda o: json.dumps(o, ensure_ascii=False),
+    )
 
 
 async def handle_api_report(request: web.Request) -> web.Response:
@@ -308,7 +200,6 @@ async def handle_api_report(request: web.Request) -> web.Response:
     resp = {
         "status": session["status"],
         "phase": session.get("phase", ""),
-        "current_phase": session.get("current_phase", ""),
         "progress_messages": session.get("progress_messages", []),
     }
     if session["status"] == "completed":
@@ -325,7 +216,7 @@ async def handle_api_report(request: web.Request) -> web.Response:
 async def handle_api_download(request: web.Request) -> web.Response:
     """GET /api/download/{session_id}/{kind} — 下载 Markdown 文件。"""
     sid = request.match_info["session_id"]
-    kind = request.match_info["kind"]  # "final" or "debug"
+    kind = request.match_info["kind"]
     session = _sessions.get(sid)
 
     if not session or session["status"] != "completed":
@@ -354,7 +245,7 @@ def create_app() -> web.Application:
 
 
 # ╔══════════════════════════════════════════════════════════════════════════════╗
-# ║  HTML 前端 — 对话式 + 深度研究自动切换 + 下载                                ║
+# ║  HTML 前端                                                                   ║
 # ╚══════════════════════════════════════════════════════════════════════════════╝
 
 HTML_PAGE = r"""<!DOCTYPE html>
@@ -380,10 +271,9 @@ HTML_PAGE = r"""<!DOCTYPE html>
   .msg-agent .bubble h3{font-size:14px;margin:8px 0 2px;color:#a78bfa}
   .msg-agent .bubble blockquote{border-left:3px solid var(--accent);padding-left:10px;color:var(--text2);margin:8px 0}
   .msg-agent .bubble code{background:#0003;padding:1px 5px;border-radius:4px;font-size:12px}
-  .process{font-size:11px;color:var(--text2);margin-top:8px;cursor:pointer;user-select:none}
-  .process:hover{color:var(--accent)}
-  .process-detail{display:none;margin-top:6px;padding:10px;background:#0002;border-radius:6px;font-size:11px;max-height:180px;overflow-y:auto;white-space:pre-wrap}
-  .process-detail.show{display:block}
+  .process-badge{display:inline-block;font-size:11px;padding:2px 8px;border-radius:4px;margin:2px}
+  .badge-mock{background:var(--warn);color:#000}
+  .badge-real{background:var(--success);color:#000}
   .status-bar{padding:8px 0;display:none;font-size:12px;color:var(--text2)}
   .status-bar.show{display:flex;align-items:center;gap:8px}
   .spinner{width:12px;height:12px;border:2px solid var(--border);border-top-color:var(--accent);border-radius:50%;animation:spin .8s infinite}
@@ -417,21 +307,22 @@ HTML_PAGE = r"""<!DOCTYPE html>
 <select id="modeSel"><option value="auto">自动</option><option value="chat">对话</option><option value="deep">深度研究</option></select>
 <button id="btn" onclick="send()">发送</button>
 </div></div>
-<footer>HorizonRL-Agent v0.1.0 · NWPU · 2026</footer>
+<footer>HorizonRL-Agent v0.2.1 · NWPU · 2026</footer>
 </div>
 <script>
-let isPolling = false;
+let isPolling=false;
 
 function send(){
   const inp=document.getElementById('query');
   const q=inp.value.trim();
   if(!q||isPolling)return;
-  inp.value='';  // 发送后清空输入框
+  inp.value='';
   const mode=document.getElementById('modeSel').value;
   const btn=document.getElementById('btn');
   btn.disabled=true;btn.textContent='...';
   addMessage('user',q);
-  fetch('/api/chat',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({message:q,mode:mode})})
+  fetch('/api/chat',{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({message:q,mode:mode})})
   .then(r=>r.json())
   .then(data=>{
     if(data.mode==='chat'){
@@ -449,17 +340,17 @@ function startPolling(sid){
   isPolling=true;
   const bar=document.getElementById('statusBar');
   bar.classList.add('show');
-  const phases={planning:'正在规划任务...',searching:'正在搜索资料...',writing:'正在撰写报告...',completed:'完成!'};
+  const phases={planning:'正在规划任务...',searching:'正在搜索资料...',executing:'正在执行子任务...',
+    verifying:'正在验证结果...',replanning:'正在重规划...',writing:'正在撰写报告...',completed:'完成!'};
   let shownMsgs=0;
 
-  // 高频轮询 (每500ms), 显示实时进度
   const interval=setInterval(()=>{
     fetch('/api/report/'+sid).then(r=>r.json()).then(data=>{
-      // 显示新进度消息
       const msgs=data.progress_messages||[];
       while(shownMsgs<msgs.length){
         const m=msgs[shownMsgs];
-        document.getElementById('statusText').textContent=phases[m.phase]||m.message||m.phase;
+        document.getElementById('statusText').textContent=
+          phases[m.phase]||m.message||m.phase;
         shownMsgs++;
       }
       if(data.status==='completed'){
@@ -467,14 +358,17 @@ function startPolling(sid){
         bar.classList.remove('show');
         document.getElementById('btn').disabled=false;
         document.getElementById('btn').textContent='发送';
-        let html='深度研究完成!\n\n'+(data.final_answer||'');
+        const p=data.process||{};
+        let html='深度研究完成!\n\n';
+        html+='<span class="process-badge badge-'+(p.mock_ratio==='100%'?'mock':'real')+'">'+
+          (p.mock_ratio==='100%'?'Mock Demo':'真实数据')+'</span> ';
+        html+='<span style="font-size:11px;color:var(--text2)">'+
+          p.success+'/'+p.total+' 成功 · '+p.tool_calls+' 工具 · '+p.elapsed+'</span>\n\n';
+        html+=(data.final_answer||'');
         let dl='<div style="margin-top:12px">';
-        dl+='<a class="dl-btn" href="'+data.download_url_final+'" download>下载 final_answer.md</a> ';
-        dl+='<a class="dl-btn" href="'+data.download_url_debug+'" download>下载 debug_report.md</a></div>';
+        dl+='<a class="dl-btn" href="'+data.download_url_final+'" download>📥 下载 final_answer.md</a> ';
+        dl+='<a class="dl-btn" href="'+data.download_url_debug+'" download>📥 下载 debug_report.md</a></div>';
         addMessage('agent',html,null,dl);
-        setTimeout(()=>{
-          let a=document.createElement('a');a.href=data.download_url_final;a.download='final_answer.md';a.click();
-        },500);
       }else if(data.status==='failed'){
         clearInterval(interval);isPolling=false;
         bar.classList.remove('show');
@@ -520,7 +414,7 @@ def main():
     port = int(os.environ.get("PORT", 8080))
     print(f"""
 ==============================================================
-  HorizonRL-Agent Web — 对话+深度研究双路由
+  HorizonRL-Agent Web — 对话+深度研究双路由 (v2: 共享Service)
   http://localhost:{port}
   Ctrl+C 停止
 ==============================================================

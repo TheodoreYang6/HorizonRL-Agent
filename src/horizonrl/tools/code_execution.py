@@ -478,7 +478,7 @@ class CodeExecutionTool:
             "stdout": code,
             "stderr": "",
             "success": True,
-            "error": None,
+            "error": "",
             "_auto_generated": True,
         }
 
@@ -603,7 +603,7 @@ class CodeExecutionTool:
                 "stdout": stdout if stdout else "(代码执行完成，无输出)",
                 "stderr": stderr,
                 "success": True,
-                "error": None,
+                "error": "",
             }
         except Exception:
             return {

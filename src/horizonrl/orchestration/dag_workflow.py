@@ -60,12 +60,15 @@ from __future__ import annotations
 import asyncio
 import dataclasses
 import inspect
+import logging
 import time
 import types as _types
 import typing
 import uuid
 from enum import Enum
 from pathlib import Path
+
+logger = logging.getLogger(__name__)
 
 # ─── LangGraph 工作流状态 ────────────────────────────────────────────────
 # 每个节点返回部分更新，LangGraph 按 reducer 语义合并。
@@ -132,11 +135,12 @@ class WorkflowState(TypedDict):
 def _make_initial_state(
     user_task: str = "",
     max_iterations: int = 10,
+    session_id: str = "",
 ) -> WorkflowState:
     """创建初始工作流状态。"""
     return WorkflowState(
         user_task=user_task,
-        session_id="",
+        session_id=session_id,
         plan=None,
         results={},
         verifications={},
@@ -239,6 +243,7 @@ class ResearchOrchestrator:
         verifier: Verifier | None = None,
         replanner: Replanner | None = None,
         memory: HierarchicalMemory | None = None,
+        writer: Writer | None = None,
         embedding_client=None,  # LLMClient for embedding (default: None = n-gram fallback)
     ):
         self.planner = planner
@@ -250,7 +255,7 @@ class ResearchOrchestrator:
             max_retries_per_task=3, max_total_replans=5
         )
         self.memory = memory or HierarchicalMemory()
-        self.writer = Writer(mode="template")
+        self.writer = writer or Writer(mode="template")
 
         # 注入 embedding client 到 L3 经验归档（启用真实向量检索）
         if embedding_client is not None:
@@ -261,22 +266,28 @@ class ResearchOrchestrator:
 
     # ── 公共 API ────────────────────────────────────────────────────────
 
-    async def run(self, user_task: str) -> WorkflowState:
+    async def run(self, user_task: str, session_id: str = "") -> WorkflowState:
         """执行完整的研究工作流。
 
         Args:
             user_task: 用户的研究问题（自然语言）。
+            session_id: 可选，指定会话 ID。空字符串则自动生成。
 
         Returns:
             包含 plan、results、final_output 的完整状态 dict。
         """
+        # 每次 run() 重置 Replanner 和 Memory 状态，确保会话隔离
+        self.replanner.reset()
+        self.memory.clear()
+
         initial_state = _make_initial_state(
             user_task=user_task,
             max_iterations=self.max_iterations,
+            session_id=session_id,
         )
         return await self._graph.ainvoke(initial_state)
 
-    async def stream(self, user_task: str):
+    async def stream(self, user_task: str, session_id: str = ""):
         """流式执行工作流，每步返回中间状态。
 
         Yields:
@@ -285,6 +296,7 @@ class ResearchOrchestrator:
         initial_state = _make_initial_state(
             user_task=user_task,
             max_iterations=self.max_iterations,
+            session_id=session_id,
         )
         async for event in self._graph.astream(initial_state):
             for node_name, node_output in event.items():
@@ -384,7 +396,8 @@ class ResearchOrchestrator:
                 continue
             deps_satisfied = all(
                 plan.nodes[dep_id].status in (
-                    TaskStatus.SUCCESS, TaskStatus.FAILED, TaskStatus.SKIPPED
+                    TaskStatus.SUCCESS, TaskStatus.FAILED, TaskStatus.SKIPPED,
+                    TaskStatus.CANCELLED,
                 )
                 for dep_id in node.depends_on
             )
@@ -536,7 +549,17 @@ class ResearchOrchestrator:
             else:
                 node.status = TaskStatus.FAILED
                 node.error_msg = vr.feedback
-            self.memory.record(result, vr)
+            self.memory.record_task(
+                task_id=result.task_id,
+                task_name=node.spec.name,
+                output=result.output,
+                success=result.success,
+                error_type=vr.error_type.value if vr else "",
+                evidence_count=len(result.evidence),
+                tool_calls=len(result.tool_calls),
+                tokens_used=result.tokens_used,
+                elapsed=result.elapsed,
+            )
 
         # L1 自动压缩（超阈值时 L1→L2）
         self.memory.auto_compress()
@@ -649,10 +672,23 @@ class ResearchOrchestrator:
         results = {k: _from_dict(StepResult, v) for k, v in raw_results.items()}
         vr_objects = {k: _from_dict(VerificationResult,v) for k, v in verifications.items()}
         mem_ctx = self.memory.get_context()
+
+        # 统计工具调用和耗时
+        total_tool_calls = 0
+        total_elapsed = 0.0
+        for r in results.values():
+            total_tool_calls += len(r.tool_calls)
+            total_elapsed += r.elapsed
+        started_at = state.get("started_at", time.time())
+        wall_time = time.time() - started_at
+
         stats = {
             "total_count": plan.total_count(),
+            "success_count": plan.success_count(),
             "rounds": state["iteration"],
+            "total_tool_calls": total_tool_calls,
             "total_replans": replan_count,
+            "total_elapsed": f"{wall_time:.1f}s",
         }
 
         try:
@@ -673,7 +709,7 @@ class ResearchOrchestrator:
                 "error": state["error"],
             }
         except Exception:
-            # Writer 失败或 session_id 为空时回退到原始 Markdown 拼接
+            logger.exception("Writer 生成报告失败，回退到原始 Markdown 拼接")
             final_text = self._build_raw_final(state)
             return {
                 "final_output": final_text,

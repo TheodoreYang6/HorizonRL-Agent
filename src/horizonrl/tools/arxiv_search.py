@@ -25,7 +25,7 @@ _ARXIV_ENDPOINTS = [
 ]
 
 # Total timeout for all endpoint attempts combined
-_RACE_TIMEOUT = 8.0
+_RACE_TIMEOUT = 4.0
 
 
 class ArxivSearchTool:

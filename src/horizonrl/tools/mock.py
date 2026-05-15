@@ -31,6 +31,7 @@ class MockWebSearch:
                     f"这是关于 '{query[:50]}' 的模拟搜索结果 #{i}。"
                     f"内容涵盖相关概念、方法、应用场景与最新进展。"
                 ),
+                "is_mock": True,
             })
         return json.dumps(results, ensure_ascii=False)
 
@@ -53,6 +54,7 @@ class MockArxivSearch:
                 "pdf_url": "https://arxiv.org/pdf/2501.00001",
                 "published": "2025-01-15",
                 "categories": ["cs.AI", "cs.CL"],
+                "is_mock": True,
             },
             {
                 "title": f"Advances in {query[:30]}: A New Approach",
@@ -65,6 +67,7 @@ class MockArxivSearch:
                 "pdf_url": "https://arxiv.org/pdf/2502.00002",
                 "published": "2025-02-20",
                 "categories": ["cs.LG"],
+                "is_mock": True,
             },
         ]
         return json.dumps(papers[:max_results], ensure_ascii=False)
@@ -81,7 +84,7 @@ class MockCodeExecution:
                 "stdout": "",
                 "stderr": "",
                 "success": True,
-                "error": None,
+                "error": "",
             }
         return {
             "stdout": (
@@ -91,7 +94,7 @@ class MockCodeExecution:
             ),
             "stderr": "",
             "success": True,
-            "error": None,
+            "error": "",
         }
 
 

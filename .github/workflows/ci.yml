@@ -44,6 +44,7 @@ jobs:
           python -c "from horizonrl.llm.client import LLMClient, EmbedResult"
           python -c "from horizonrl.agent.planner import Planner, _build_plan_graph"
           python -c "from horizonrl.agent.writer import Writer"
+          python -c "from horizonrl.services.research_service import run_research_session, SessionArtifacts"
 
       - name: Run tests (mock mode)
         env:
@@ -52,6 +53,14 @@ jobs:
           ENABLE_LLM_WRITER: "false"
         run: |
           python -m pytest tests/ -v --tb=short
+
+      - name: Mock benchmark smoke (2 tasks × 1 round)
+        env:
+          HORIZON_SEARCH_PROVIDER: mock
+          HORIZON_OFFLINE_MODE: "true"
+          ENABLE_LLM_WRITER: "false"
+        run: |
+          python examples/07_benchmark.py --category 事实知识 --rounds 1
 
   # Python 3.13 实验性支持（允许失败）
   test-python313:
@@ -87,6 +96,7 @@ jobs:
           python -c "from horizonrl.llm.client import LLMClient, EmbedResult"
           python -c "from horizonrl.agent.planner import Planner, _build_plan_graph"
           python -c "from horizonrl.agent.writer import Writer"
+          python -c "from horizonrl.services.research_service import run_research_session, SessionArtifacts"
 
       - name: Run tests (mock mode)
         env:

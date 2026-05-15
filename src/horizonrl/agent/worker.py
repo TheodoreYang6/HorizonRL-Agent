@@ -157,15 +157,41 @@ class AgentWorker:
 
     def _build_params(self, tool_name: str, task: TaskSpec) -> dict:
         """根据工具类型构建合适的参数。"""
-        if tool_name == "web_search":
-            return {"query": task.description, "num_results": 10}
-        elif tool_name == "arxiv_search":
-            return {"query": task.description, "max_results": 10}
+        if tool_name in ("web_search", "arxiv_search", "retrieval"):
+            query = self._clean_search_query(task.description)
+            if tool_name == "arxiv_search":
+                return {"query": query, "max_results": 10}
+            elif tool_name == "retrieval":
+                return {"query": query, "top_k": 5}
+            return {"query": query, "num_results": 10}
         elif tool_name == "code_execution":
             return {"code": task.description}
-        elif tool_name == "retrieval":
-            return {"query": task.description, "top_k": 5}
         return {"input": task.description}
+
+    @staticmethod
+    def _clean_search_query(description: str) -> str:
+        """从任务描述中提取干净的搜索查询词。
+
+        LLMPlanner 生成的描述可能很冗长（如 '搜索XX，包括YY、ZZ'），
+        直接当搜索 query 效果差。此方法提取核心关键词。
+        """
+        import re
+        text = description.strip()
+        # 去掉常见前缀
+        for prefix in ("搜索", "检索", "查找", "调研", "了解", "分析", "探讨"):
+            text = re.sub(rf"^{prefix}", "", text, count=1).strip()
+        # 去掉尾部句号
+        text = text.rstrip("。，.。")
+        # 截断到 120 字符 (中文搜索query不宜过长)
+        if len(text) > 120:
+            # 在最后一个逗号或空格处截断
+            cut = text[:120]
+            last_comma = max(cut.rfind("，"), cut.rfind(","), cut.rfind(" "))
+            if last_comma > 60:
+                text = cut[:last_comma]
+            else:
+                text = cut
+        return text.strip() or description[:120]
 
     def _extract_evidence(
         self, tool_name: str, output: str, task_id: str,

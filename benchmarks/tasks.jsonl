@@ -1,0 +1,20 @@
+{"id": "factual_001", "category": "事实知识", "difficulty": "easy", "query": "什么是Python的GIL(全局解释器锁)", "expected_answer_type": "short_exact", "expected_tools": ["web_search"], "requires_report": false}
+{"id": "factual_002", "category": "事实知识", "difficulty": "easy", "query": "Transformer模型中的位置编码有什么作用", "expected_answer_type": "short_exact", "expected_tools": ["web_search"], "requires_report": false}
+{"id": "factual_003", "category": "事实知识", "difficulty": "medium", "query": "量子计算中量子比特和经典比特的区别", "expected_answer_type": "short_exact", "expected_tools": ["web_search"], "requires_report": false}
+{"id": "factual_004", "category": "事实知识", "difficulty": "easy", "query": "什么是RESTful API及其设计原则", "expected_answer_type": "short_exact", "expected_tools": ["web_search"], "requires_report": false}
+{"id": "concept_001", "category": "概念原理", "difficulty": "medium", "query": "Transformer多头注意力机制的工作原理", "expected_answer_type": "long_report", "expected_tools": ["web_search", "arxiv_search"], "requires_report": true}
+{"id": "concept_002", "category": "概念原理", "difficulty": "medium", "query": "Python asyncio事件循环的运行机制", "expected_answer_type": "long_report", "expected_tools": ["web_search", "code_execution"], "requires_report": true}
+{"id": "concept_003", "category": "概念原理", "difficulty": "medium", "query": "卷积神经网络中卷积操作的数学原理", "expected_answer_type": "long_report", "expected_tools": ["web_search", "arxiv_search"], "requires_report": true}
+{"id": "concept_004", "category": "概念原理", "difficulty": "hard", "query": "数据库索引的B+树结构及其查询优化原理", "expected_answer_type": "long_report", "expected_tools": ["web_search"], "requires_report": true}
+{"id": "compare_001", "category": "技术对比", "difficulty": "medium", "query": "对比RNN、LSTM和GRU在处理长序列时的优劣", "expected_answer_type": "long_report", "expected_tools": ["web_search", "arxiv_search"], "requires_report": true}
+{"id": "compare_002", "category": "技术对比", "difficulty": "medium", "query": "PyTorch和TensorFlow在易用性和性能上的对比", "expected_answer_type": "long_report", "expected_tools": ["web_search"], "requires_report": true}
+{"id": "compare_003", "category": "技术对比", "difficulty": "medium", "query": "关系型数据库和非关系型数据库的适用场景对比", "expected_answer_type": "long_report", "expected_tools": ["web_search"], "requires_report": true}
+{"id": "compare_004", "category": "技术对比", "difficulty": "easy", "query": "HTTP/1.1和HTTP/2的主要区别和性能提升", "expected_answer_type": "short_exact", "expected_tools": ["web_search"], "requires_report": false}
+{"id": "code_001", "category": "代码实践", "difficulty": "medium", "query": "Python中多线程和多进程的性能差异及适用场景", "expected_answer_type": "long_report", "expected_tools": ["web_search", "code_execution"], "requires_report": true}
+{"id": "code_002", "category": "代码实践", "difficulty": "medium", "query": "如何使用Python的contextmanager实现资源管理", "expected_answer_type": "long_report", "expected_tools": ["web_search", "code_execution"], "requires_report": true}
+{"id": "code_003", "category": "代码实践", "difficulty": "medium", "query": "Docker容器化部署相比传统部署的优势", "expected_answer_type": "long_report", "expected_tools": ["web_search"], "requires_report": true}
+{"id": "code_004", "category": "代码实践", "difficulty": "medium", "query": "Git中rebase和merge的区别及最佳实践", "expected_answer_type": "long_report", "expected_tools": ["web_search"], "requires_report": true}
+{"id": "survey_001", "category": "综述前沿", "difficulty": "hard", "query": "2024-2025年大语言模型的最新架构进展", "expected_answer_type": "long_report", "expected_tools": ["web_search", "arxiv_search"], "requires_report": true}
+{"id": "survey_002", "category": "综述前沿", "difficulty": "hard", "query": "视觉Transformer(ViT)在计算机视觉中的发展现状", "expected_answer_type": "long_report", "expected_tools": ["web_search", "arxiv_search"], "requires_report": true}
+{"id": "survey_003", "category": "综述前沿", "difficulty": "hard", "query": "强化学习在LLM对齐中的最新应用(RLHF/DPO)", "expected_answer_type": "long_report", "expected_tools": ["web_search", "arxiv_search"], "requires_report": true}
+{"id": "survey_004", "category": "综述前沿", "difficulty": "hard", "query": "边缘计算和联邦学习的最新发展趋势", "expected_answer_type": "long_report", "expected_tools": ["web_search", "arxiv_search"], "requires_report": true}

@@ -68,7 +68,7 @@ _RESEARCH_TEMPLATE: list[dict] = [
     },
     {
         "name": "检索最新进展",
-        "description": "搜索 '{topic}' 在近两年的最新研究和方法",
+        "description": "搜索 '{topic}' 在 {year} 年的最新研究和方法",
         "tool_names": ["web_search", "arxiv_search"],
         "depends_on": [],
         "priority": TaskPriority.P0,
@@ -134,6 +134,92 @@ _CODE_TEMPLATE: list[dict] = [
     },
 ]
 
+_COMPARISON_TEMPLATE: list[dict] = [
+    {
+        "name": "检索对象A信息",
+        "description": "搜索 '{topic}' 中第一个对比对象的详细信息",
+        "tool_names": ["web_search"],
+        "depends_on": [],
+        "priority": TaskPriority.P0,
+    },
+    {
+        "name": "检索对象B信息",
+        "description": "搜索 '{topic}' 中第二个对比对象的详细信息",
+        "tool_names": ["web_search"],
+        "depends_on": [],
+        "priority": TaskPriority.P0,
+    },
+    {
+        "name": "提取对比维度",
+        "description": "搜索 '{topic}' 的通用对比指标和评价标准",
+        "tool_names": ["web_search"],
+        "depends_on": [],
+        "priority": TaskPriority.P1,
+    },
+    {
+        "name": "逐维度对比",
+        "description": "按提取的维度对 '{topic}' 中的两者做定量/定性对比",
+        "tool_names": ["web_search"],
+        "depends_on": [],  # 动态填充
+        "priority": TaskPriority.P1,
+    },
+    {
+        "name": "生成对比结论",
+        "description": "基于对比结果生成 '{topic}' 的优劣分析及选型建议",
+        "tool_names": ["web_search"],
+        "depends_on": [],  # 动态填充
+        "priority": TaskPriority.P2,
+    },
+]
+
+_SUMMARY_TEMPLATE: list[dict] = [
+    {
+        "name": "多源收集",
+        "description": "从多个来源收集 '{topic}' 的相关信息",
+        "tool_names": ["web_search", "arxiv_search"],
+        "depends_on": [],
+        "priority": TaskPriority.P0,
+    },
+    {
+        "name": "信息去重与排序",
+        "description": "对收集到的信息去重并按相关性排序",
+        "tool_names": ["web_search"],
+        "depends_on": [],  # 动态填充
+        "priority": TaskPriority.P1,
+    },
+    {
+        "name": "结构化汇总",
+        "description": "将 '{topic}' 的信息按主题/时间线/重要性组织为结构化摘要",
+        "tool_names": ["web_search"],
+        "depends_on": [],  # 动态填充
+        "priority": TaskPriority.P2,
+    },
+]
+
+_FACTUAL_QA_TEMPLATE: list[dict] = [
+    {
+        "name": "权威来源检索",
+        "description": "从权威来源搜索 '{topic}' 的事实性信息",
+        "tool_names": ["web_search"],
+        "depends_on": [],
+        "priority": TaskPriority.P0,
+    },
+    {
+        "name": "交叉验证",
+        "description": "用不同来源交叉验证 '{topic}' 的关键事实",
+        "tool_names": ["web_search", "arxiv_search"],
+        "depends_on": [],  # 动态填充
+        "priority": TaskPriority.P1,
+    },
+    {
+        "name": "生成答案",
+        "description": "基于验证后的事实生成 '{topic}' 的准确答案，标注置信度",
+        "tool_names": ["web_search"],
+        "depends_on": [],  # 动态填充
+        "priority": TaskPriority.P2,
+    },
+]
+
 
 class Planner:
     """任务分解器 —— 将 UserTask 拆解为可执行的 PlanGraph。
@@ -156,6 +242,9 @@ class Planner:
         self._templates = {
             "research": _RESEARCH_TEMPLATE,
             "code": _CODE_TEMPLATE,
+            "comparison": _COMPARISON_TEMPLATE,
+            "summary": _SUMMARY_TEMPLATE,
+            "factual_qa": _FACTUAL_QA_TEMPLATE,
         }
 
     def plan(self, task: UserTask) -> PlanGraph:
@@ -174,13 +263,20 @@ class Planner:
         template = self._templates.get(task_type, _RESEARCH_TEMPLATE)
 
         # 生成所有 TaskSpec
+        import time as _time
+        current_year = _time.strftime('%Y')
         specs: list[TaskSpec] = []
         spec_ids: list[str] = []
         for tmpl in template:
+            desc = tmpl["description"]
+            if callable(desc):
+                desc = desc(topic=task.description, year=current_year)
+            else:
+                desc = desc.format(topic=task.description, year=current_year)
             spec = TaskSpec(
                 id=_short_id(),
                 name=tmpl["name"],
-                description=tmpl["description"].format(topic=task.description),
+                description=desc,
                 tool_names=list(tmpl["tool_names"]),
                 depends_on=[],  # 稍后填充
                 priority=tmpl.get("priority", TaskPriority.P1),
@@ -207,17 +303,62 @@ class Planner:
             specs[3].depends_on = [spec_ids[1], spec_ids[2]]
             # 验证修复 → 依赖 修复代码
             specs[4].depends_on = [spec_ids[3]]
+        elif task_type == "comparison":
+            # 逐维度对比 → 依赖 对象A + 对象B + 对比维度
+            specs[3].depends_on = [spec_ids[0], spec_ids[1], spec_ids[2]]
+            # 生成对比结论 → 依赖 逐维度对比
+            specs[4].depends_on = [spec_ids[3]]
+        elif task_type == "summary":
+            # 信息去重与排序 → 依赖 多源收集
+            specs[1].depends_on = [spec_ids[0]]
+            # 结构化汇总 → 依赖 信息去重与排序
+            specs[2].depends_on = [spec_ids[1]]
+        elif task_type == "factual_qa":
+            # 交叉验证 → 依赖 权威来源检索
+            specs[1].depends_on = [spec_ids[0]]
+            # 生成答案 → 依赖 交叉验证
+            specs[2].depends_on = [spec_ids[1]]
 
         return _build_plan_graph(specs)
 
     def _classify_task(self, task: UserTask) -> str:
-        """根据任务描述和 required_tools 判断任务类型。"""
+        """根据任务描述和 required_tools 判断任务类型。
+
+        支持类型: code, comparison, summary, factual_qa, research (默认).
+        """
+        # 强制工具优先
         if "code_execution" in task.required_tools:
             return "code"
-        desc_lower = task.description.lower()
-        code_keywords = ("代码", "修复", "bug", "debug", "编程", "函数", "测试")
-        if any(kw in desc_lower for kw in code_keywords):
+
+        desc = task.description.lower()
+
+        # code: 代码/调试/修复相关
+        code_kw = ("代码", "修复", "bug", "debug", "编程", "函数", "测试",
+                   "报错", "异常", "重构", "refactor", "编译", "运行")
+        if any(kw in desc for kw in code_kw):
             return "code"
+
+        # comparison: 对比/比较/选型相关
+        cmp_kw = ("对比", "比较", "区别", "差异", "优劣", "选型", "哪个更好",
+                  "哪个更", "区别是什么", "有何不同", "compare", "vs", "versus",
+                  "差别", "优缺点", "利弊", "抉择")
+        if any(kw in desc for kw in cmp_kw):
+            return "comparison"
+
+        # summary: 汇总/总结/概述相关
+        sum_kw = ("汇总", "总结", "概述", "梳理", "归纳", "综述", "概览",
+                  "一览", "整理", "汇总一下", "总结一下", "summarize",
+                  "overview", "梳理一下")
+        if any(kw in desc for kw in sum_kw):
+            return "summary"
+
+        # factual_qa: 事实问答/定义/查询
+        qa_kw = ("是什么", "什么是", "定义", "谁", "何时", "哪里", "多少",
+                 "哪个", "列出", "列举", "查询", "百科", "what is",
+                 "who is", "when", "where", "define")
+        if any(kw in desc for kw in qa_kw):
+            return "factual_qa"
+
         return "research"
 
 
@@ -260,10 +401,13 @@ class LLMPlanner:
         return self._build_graph(specs)
 
     def _system_prompt(self) -> str:
+        import time as _time
+        today = _time.strftime('%Y年%m月%d日')
         return (
-            "你是一个任务规划专家。将用户的问题拆解为可并行执行的子任务。"
-            "核心原则：能并行的任务绝不串行。只有真正依赖前一步结果的任务才加依赖。"
-            "简单问题 3-4 个任务即可，复杂问题 5-6 个。只输出 JSON，不解释。"
+            f"你是一个任务规划专家。将用户的问题拆解为可并行执行的子任务。"
+            f"注意：当前日期是 {today}。如用户问\"最新进展\"，请在搜索描述中加入最近的年份。"
+            f"核心原则：能并行的任务绝不串行。只有真正依赖前一步结果的任务才加依赖。"
+            f"简单问题 3-4 个任务即可，复杂问题 5-6 个。只输出 JSON，不解释。"
         )
 
     def _build_prompt(self, task: UserTask) -> str:

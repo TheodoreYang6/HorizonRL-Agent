@@ -276,7 +276,7 @@ class TestSessionStats:
             payload={"tool_name": "arxiv_search"},
         ))
         session = await log.end_session()
-        assert session.total_tool_calls == 3
+        assert session.total_tool_calls == 1  # 仅 TOOL_RESULT 计数，避免重复
 
     @pytest.mark.asyncio
     async def test_replan_counted(self, tmp_dir):

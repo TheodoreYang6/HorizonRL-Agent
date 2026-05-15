@@ -227,7 +227,7 @@ class TrajectorySession:
         self.events.append(event)
         # 自动累加统计
         self.total_tokens += event.cost
-        if event.event_type in (EventType.TOOL_CALL, EventType.TOOL_RESULT):
+        if event.event_type == EventType.TOOL_RESULT:
             self.total_tool_calls += 1
         if event.event_type == EventType.REPLAN_PATCH:
             self.replan_count += 1

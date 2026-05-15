@@ -90,3 +90,49 @@ class TestPlanner:
         assert isinstance(spec.priority, TaskPriority)
         assert spec.retry_count == 0
         assert spec.max_retries == 3
+
+    def test_classify_comparison_task(self):
+        planner = Planner()
+        task = UserTask(description="对比 PyTorch 和 TensorFlow 的优劣")
+        plan = planner.plan(task)
+        assert len(plan.nodes) == 5  # comparison template 5 steps
+        # 逐维度对比应依赖前三个任务
+        nodes = list(plan.nodes.values())
+        compare_node = nodes[3]
+        assert len(compare_node.depends_on) == 3
+
+    def test_classify_summary_task(self):
+        planner = Planner()
+        task = UserTask(description="综述一下大语言模型的训练方法")
+        plan = planner.plan(task)
+        assert len(plan.nodes) == 3  # summary template 3 steps
+        nodes = list(plan.nodes.values())
+        # 信息去重 → 依赖多源收集
+        assert len(nodes[1].depends_on) == 1
+        # 结构化汇总 → 依赖信息去重
+        assert len(nodes[2].depends_on) == 1
+
+    def test_classify_factual_qa_task(self):
+        planner = Planner()
+        task = UserTask(description="什么是 Transformer 中的自注意力机制")
+        plan = planner.plan(task)
+        assert len(plan.nodes) == 3  # factual_qa template 3 steps
+        nodes = list(plan.nodes.values())
+        # 交叉验证 → 依赖权威来源检索
+        assert len(nodes[1].depends_on) == 1
+        # 生成答案 → 依赖交叉验证
+        assert len(nodes[2].depends_on) == 1
+
+    def test_classify_code_with_keywords(self):
+        planner = Planner()
+        for kw in ("修复 login bug", "代码重构", "debug 内存泄漏",
+                    "编译报错处理", "函数测试"):
+            task = UserTask(description=kw)
+            plan = planner.plan(task)
+            assert len(plan.nodes) == 5  # code template
+
+    def test_classify_defaults_to_research(self):
+        planner = Planner()
+        task = UserTask(description="人工智能的未来发展趋势")
+        plan = planner.plan(task)
+        assert len(plan.nodes) == 5  # falls back to research template

@@ -334,5 +334,11 @@ class WebSearchTool:
         ]
 
     def __call__(self, query: str) -> list[dict[str, str]]:
-        """Synchronous interface."""
-        return asyncio.run(self.search(query))
+        """Synchronous interface — safe from any context."""
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            return asyncio.run(self.search(query))
+        import concurrent.futures
+        with concurrent.futures.ThreadPoolExecutor() as pool:
+            return pool.submit(asyncio.run, self.search(query)).result()

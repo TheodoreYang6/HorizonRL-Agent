@@ -9,6 +9,7 @@ from horizonrl.agent.writer import (
     WriterConfig,
     UserAnswerWriter,
     DebugReportRenderer,
+    _collect_evidence,
     _mock_warning,
     _evidence_ref_text,
 )
@@ -162,7 +163,7 @@ class TestDebugReportRenderer:
             EvidenceItem(content="相同内容", source_type="web"),
             EvidenceItem(content="相同内容", source_type="web"),
         ])}
-        evidence = r._collect_evidence(results)
+        evidence = _collect_evidence(results)
         assert len(evidence) == 1
 
 
@@ -172,7 +173,7 @@ class TestDebugReportRenderer:
 class TestUserAnswerWriter:
     def test_template_write_includes_provenance(self, sample_plan, sample_results):
         w = UserAnswerWriter()
-        evidence = w._collect_evidence(sample_results)
+        evidence = _collect_evidence(sample_results)
         report = w._template_write("测试", evidence)
         assert "核心结论" in report
         assert "参考证据" in report
@@ -180,7 +181,7 @@ class TestUserAnswerWriter:
     def test_final_answer_excludes_debug_info(self, sample_results):
         """final_answer 不得包含 task_id、Token、耗时等调试信息。"""
         w = UserAnswerWriter()
-        evidence = w._collect_evidence(sample_results)
+        evidence = _collect_evidence(sample_results)
         report = w._template_write("测试", evidence)
         assert "task_id" not in report
         assert "Token" not in report
@@ -216,7 +217,7 @@ class TestUserAnswerWriter:
             EvidenceItem(content="相同", source_type="web"),
             EvidenceItem(content="相同", source_type="web"),
         ])}
-        evidence = w._collect_evidence(results)
+        evidence = _collect_evidence(results)
         assert len(evidence) == 1
 
     def test_collect_evidence_groups_by_type(self):
@@ -226,7 +227,7 @@ class TestUserAnswerWriter:
             EvidenceItem(content="a1", source_type="arxiv"),
             EvidenceItem(content="c1", source_type="code_output"),
         ])}
-        evidence = w._collect_evidence(results)
+        evidence = _collect_evidence(results)
         types = {e["type"] for e in evidence}
         assert "web" in types
         assert "arxiv" in types

@@ -60,6 +60,7 @@ desktop.ini
 .claude/worktrees/
 CLAUDE.local.md
 .settings.local.json
+.claude/settings.local.json
 
 # MCP
 .claude/mcp_cache/
@@ -71,6 +72,7 @@ API_key.txt
 # Development process files (not for public repo)
 DEVELOPMENT_PLAN.md
 SYSTEM_MANUAL.md
+CLAUDE.md
 paper_outline.md
 chatgpt_suggestion.md
 examples/01_async_demo.py
@@ -78,8 +80,10 @@ tests/manual/
 .githooks/
 .coverage
 
+# Generated benchmark outputs
+benchmark_results/
+
 # Temp files
 resume_text.txt
 resume_text_new.txt
 scripts/update_resume.py
-.claude/settings.local.json

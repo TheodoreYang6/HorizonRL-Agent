@@ -242,7 +242,8 @@ class PlanGraph:
             # 确认所有依赖节点都处于终态
             deps_satisfied = all(
                 self.nodes[dep_id].status in (
-                    TaskStatus.SUCCESS, TaskStatus.FAILED, TaskStatus.SKIPPED
+                    TaskStatus.SUCCESS, TaskStatus.FAILED, TaskStatus.SKIPPED,
+                    TaskStatus.CANCELLED,
                 )
                 for dep_id in node.depends_on
             )

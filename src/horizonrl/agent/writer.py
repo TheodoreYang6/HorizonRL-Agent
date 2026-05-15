@@ -89,6 +89,27 @@ def _evidence_ref_text(ev, index: int) -> str:
     return "\n".join(lines)
 
 
+def _collect_evidence(results: dict[str, StepResult]) -> list[dict]:
+    """从 StepResult 中提取去重后的证据列表，供 Writer 各子模块共用。"""
+    seen = set()
+    items = []
+    for r in results.values():
+        for ev in r.evidence:
+            key = ev.content[:100]
+            if key not in seen:
+                seen.add(key)
+                items.append({
+                    "type": ev.source_type or ev.provider or "unknown",
+                    "content": ev.content,
+                    "source": ev.source or "",
+                    "provider": ev.provider or ev.source_type or "",
+                    "search_query": ev.search_query or "",
+                    "is_mock": ev.is_mock,
+                    "score": ev.relevance_score,
+                })
+    return items
+
+
 # ╔══════════════════════════════════════════════════════════════════════════════╗
 # ║  DebugReportRenderer — 开发者调试报告                                        ║
 # ╚══════════════════════════════════════════════════════════════════════════════╝
@@ -108,7 +129,7 @@ class DebugReportRenderer:
         metadata: ReportMetadata | None = None,
     ) -> str:
         tasks = self._collect_tasks(plan, results, verifications)
-        evidence = self._collect_evidence(results)
+        evidence = _collect_evidence(results)
         lines = []
 
         lines.append(f"# [DEBUG] 执行报告: {query}")
@@ -117,7 +138,9 @@ class DebugReportRenderer:
             lines.append(f"Session: `{metadata.session_id}`")
             lines.append(f"生成时间: {time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(metadata.generated_at))}")
             lines.append(f"模式: {metadata.mode}")
-            lines.append(f"Mock数据: {'是' if metadata.used_mock_data else '否'}")
+            mock_count = sum(1 for e in evidence if e.get("is_mock", False))
+            real_count = len(evidence) - mock_count
+            lines.append(f"证据: {len(evidence)} 条 (真实 {real_count} / Mock {mock_count})")
             lines.append("")
 
         # ── 执行概要 ──
@@ -132,7 +155,7 @@ class DebugReportRenderer:
             lines.append(f"| 轮次 | {stats.get('rounds', '?')} |")
             lines.append(f"| 工具调用 | {stats.get('total_tool_calls', '?')} |")
             lines.append(f"| 重规划 | {stats.get('total_replans', '?')} |")
-            lines.append(f"| 总耗时 | {stats.get('total_elapsed', '?')}s |")
+            lines.append(f"| 总耗时 | {stats.get('total_elapsed', '?')} |")
         lines.append("")
 
         # ── 任务 DAG ──
@@ -209,22 +232,6 @@ class DebugReportRenderer:
             })
         return tasks
 
-    def _collect_evidence(self, results: dict[str, StepResult]) -> list[dict]:
-        seen = set()
-        items = []
-        for r in results.values():
-            for ev in r.evidence:
-                key = ev.content[:100]
-                if key not in seen:
-                    seen.add(key)
-                    items.append({
-                        "type": ev.source_type or ev.provider or "unknown",
-                        "content": ev.content,
-                        "is_mock": ev.is_mock,
-                    })
-        return items
-
-
 # ╔══════════════════════════════════════════════════════════════════════════════╗
 # ║  UserAnswerWriter — 用户友好答案                                             ║
 # ╚══════════════════════════════════════════════════════════════════════════════╝
@@ -251,7 +258,7 @@ class UserAnswerWriter:
     ) -> str:
         """生成 final_answer，LLM 可用时走 LLM，否则模板 fallback。"""
         verifications = verifications or {}
-        evidence = self._collect_evidence(results)
+        evidence = _collect_evidence(results)
 
         # LLM 路径
         if self.config.enable_llm_writer and self.llm is not None:
@@ -271,7 +278,10 @@ class UserAnswerWriter:
 
         mock_note = _mock_warning(evidence)
 
+        current_date = time.strftime('%Y年%m月%d日')
         prompt = f"""你是一位科技研究分析师。请根据以下检索到的证据，用流畅的中文回答用户的问题。
+
+注意: 当前日期是 {current_date}。在讨论"最新进展"、"近期研究"等内容时，请以证据的实际内容和发布日期为准，不要凭训练数据猜测时间。
 
 ## 用户问题
 {query}
@@ -385,26 +395,6 @@ class UserAnswerWriter:
             lines.append(f"*本答案由 HorizonRL-Agent 自动生成*")
         return "\n".join(lines)
 
-    def _collect_evidence(self, results: dict[str, StepResult]) -> list[dict]:
-        seen = set()
-        items = []
-        for r in results.values():
-            for ev in r.evidence:
-                key = ev.content[:100]
-                if key not in seen:
-                    seen.add(key)
-                    items.append({
-                        "type": ev.source_type or ev.provider or "unknown",
-                        "content": ev.content,
-                        "source": ev.source or "",
-                        "provider": ev.provider or ev.source_type or "",
-                        "search_query": ev.search_query or "",
-                        "is_mock": ev.is_mock,
-                        "score": ev.relevance_score,
-                    })
-        return items
-
-
 # ╔══════════════════════════════════════════════════════════════════════════════╗
 # ║  Writer 主编排                                                               ║
 # ╚══════════════════════════════════════════════════════════════════════════════╝
@@ -435,7 +425,7 @@ class Writer:
         """同步合成（模板模式）。"""
         return self._user._template_write(
             query,
-            self._user._collect_evidence(results or {}),
+            _collect_evidence(results or {}),
         )
 
     async def synthesize_async(
@@ -447,13 +437,13 @@ class Writer:
         """异步合成。LLM 模式时调用 LLM，否则模板。"""
         results = results or {}
         verifications = verifications or {}
-        evidence = self._user._collect_evidence(results)
+        evidence = _collect_evidence(results)
         mock_count = sum(1 for e in evidence if e.get("is_mock"))
 
         meta = ReportMetadata(
             author=self.config.default_author,
             mode="user",
-            used_mock_data=(mock_count == len(evidence) and len(evidence) > 0),
+            used_mock_data=(mock_count > 0),
             llm_writer_used=(self.mode == "llm" and self.llm is not None),
         )
 
@@ -476,14 +466,14 @@ class Writer:
         """
         results = results or {}
         verifications = verifications or {}
-        evidence = self._user._collect_evidence(results)
+        evidence = _collect_evidence(results)
         mock_count = sum(1 for e in evidence if e.get("is_mock"))
 
         meta = ReportMetadata(
             session_id=session_id,
             author=self.config.default_author,
             mode="user",
-            used_mock_data=(mock_count == len(evidence) and len(evidence) > 0),
+            used_mock_data=(mock_count > 0),
             llm_writer_used=(self.mode == "llm" and self.llm is not None),
         )
 
