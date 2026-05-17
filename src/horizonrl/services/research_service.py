@@ -377,7 +377,7 @@ async def run_research_session(
             "total_tool_calls": total_tool_calls,
             "total_replans": replan_count,
             "total_evidence": total_evidence,
-            "total_elapsed": f"{elapsed:.1f}s",
+            "total_elapsed": f"{total_elapsed:.1f}s",
         }
         artifacts.mock_ratio = mock_ratio
         artifacts.tool_calls_count = total_tool_calls
