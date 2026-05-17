@@ -143,6 +143,39 @@ class LLMClient:
                 error=f"LLM 调用失败: {exc}",
             )
 
+    async def chat_stream(
+        self,
+        prompt: str,
+        system_prompt: str = "",
+        temperature: float | None = None,
+        max_tokens: int | None = None,
+    ):
+        """流式调用 LLM Chat Completion — 逐 token yield。
+
+        Yields:
+            str: 每个 delta token 的文本内容。
+        """
+        temp = temperature if temperature is not None else self.config.temperature
+        max_tok = max_tokens if max_tokens is not None else self.config.max_tokens
+
+        messages = []
+        if system_prompt:
+            messages.append({"role": "system", "content": system_prompt})
+        messages.append({"role": "user", "content": prompt})
+
+        client = self._get_client()
+        stream = await client.chat.completions.create(
+            model=self.config.model,
+            messages=messages,
+            temperature=temp,
+            max_tokens=max_tok,
+            stream=True,
+        )
+        async for chunk in stream:
+            delta = chunk.choices[0].delta
+            if delta.content:
+                yield delta.content
+
     def chat_sync(self, prompt: str, system_prompt: str = "") -> LLMCallResult:
         """同步调用（内部用 asyncio.run 包装）。"""
         return asyncio.run(self.chat(prompt, system_prompt))

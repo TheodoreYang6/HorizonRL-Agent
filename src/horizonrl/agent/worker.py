@@ -210,10 +210,10 @@ class AgentWorker:
         """
         items: list[EvidenceItem] = []
         now = time.time()
+        query_text = task_description or task_id
 
         if tool_name == "web_search":
             # 优先使用 ToolManager 的规范化方法
-            query_text = task_description or task_id
             if self.tool_manager and hasattr(self.tool_manager, 'normalize_search_results'):
                 normalized = self.tool_manager.normalize_search_results(
                     tool_name, output, query=query_text
@@ -267,6 +267,9 @@ class AgentWorker:
                             content=f"{entry.get('title', '')}: {entry.get('abstract', '')}",
                             source=entry.get("url", entry.get("pdf_url", "")),
                             source_type="arxiv",
+                            provider=entry.get("provider", "arxiv"),
+                            search_query=query_text,
+                            is_mock=entry.get("is_mock", False),
                             retrieved_at=now,
                         ))
             else:
@@ -274,6 +277,8 @@ class AgentWorker:
                     content=output[:2000],
                     source="arxiv_search",
                     source_type="arxiv",
+                    provider="arxiv",
+                    is_mock="[Mock]" in output or "模拟" in output,
                     retrieved_at=now,
                 ))
 

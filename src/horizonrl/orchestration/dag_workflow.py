@@ -94,6 +94,7 @@ from horizonrl.agent.verifier import Verifier
 from horizonrl.agent.worker import AgentWorker
 from horizonrl.agent.writer import Writer
 from horizonrl.memory.hierarchical_memory import HierarchicalMemory
+from horizonrl.schemas.event import EventType, TrajectoryEvent
 from horizonrl.schemas.result import (
     StepResult,
     VerificationResult,
@@ -245,6 +246,8 @@ class ResearchOrchestrator:
         memory: HierarchicalMemory | None = None,
         writer: Writer | None = None,
         embedding_client=None,  # LLMClient for embedding (default: None = n-gram fallback)
+        trajectory_logger=None,  # TrajectoryLogger for per-node event logging
+        on_token=None,  # async callable(str) for token-level streaming
     ):
         self.planner = planner
         self.tool_manager = tool_manager
@@ -256,6 +259,8 @@ class ResearchOrchestrator:
         )
         self.memory = memory or HierarchicalMemory()
         self.writer = writer or Writer(mode="template")
+        self._logger = trajectory_logger
+        self._on_token = on_token
 
         # 注入 embedding client 到 L3 经验归档（启用真实向量检索）
         if embedding_client is not None:
@@ -263,6 +268,18 @@ class ResearchOrchestrator:
 
         # 构建并编译 LangGraph 状态图
         self._graph = self._build_graph()
+
+    def _log(self, module: str, event_type, payload: dict | None = None,
+             cost: int = 0, latency: float = 0.0, session_id: str = ""):
+        """记录轨迹事件。logger 为 None 时静默跳过。"""
+        if self._logger is None:
+            return
+        evt = TrajectoryEvent(
+            module=module, event_type=event_type,
+            payload=payload or {}, cost=cost, latency=latency,
+            session_id=session_id,
+        )
+        self._logger.log_nowait(evt)
 
     # ── 公共 API ────────────────────────────────────────────────────────
 
@@ -370,15 +387,28 @@ class ResearchOrchestrator:
             return {"session_id": sid}
 
         session_id = state["session_id"] or f"session_{uuid.uuid4().hex[:12]}"
+        # L3 检索: 查找历史相关经验，注入任务描述
+        l3_context = ""
+        try:
+            l3_results = self.memory.retrieve_l3(state["user_task"], top_k=3)
+            if l3_results:
+                l3_context = "\n[历史相关经验]\n" + "\n".join(f"- {r}" for r in l3_results)
+        except Exception:
+            pass  # L3 不可用时静默跳过
         user_task = UserTask(
-            description=state["user_task"],
+            description=state["user_task"] + l3_context,
             max_steps=30,
             max_tokens=50_000,
         )
+        self._log("planner", EventType.PLAN_START,
+                  payload={"query": state["user_task"][:200]}, session_id=session_id)
         if inspect.iscoroutinefunction(self.planner.plan):
             plan = await self.planner.plan(user_task)
         else:
             plan = self.planner.plan(user_task)
+        self._log("planner", EventType.PLAN_COMPLETE,
+                  payload={"num_subtasks": plan.total_count(), "root_ids": plan.root_ids},
+                  session_id=session_id)
         return {"plan": plan, "session_id": session_id}
 
     async def _mark_ready(self, state: WorkflowState) -> WorkflowState:
@@ -444,6 +474,10 @@ class ResearchOrchestrator:
 
         async def _run_one(node: PlanNode) -> StepResult:
             node.status = TaskStatus.RUNNING
+            sid = state.get("session_id", "")
+            self._log("worker", EventType.WORKER_START,
+                      payload={"task_id": node.id, "task_name": node.spec.name},
+                      session_id=sid)
             try:
                 async with sem:
                     worker = AgentWorker(
@@ -457,6 +491,16 @@ class ResearchOrchestrator:
                     else:
                         node.status = TaskStatus.FAILED
                         node.error_msg = result.error
+                    # Log tool calls
+                    for tc in result.tool_calls:
+                        self._log("tool", EventType.TOOL_RESULT,
+                                  payload={"tool_name": tc.tool_name, "success": tc.is_success,
+                                           "elapsed": tc.elapsed},
+                                  cost=tc.tokens_used, latency=tc.elapsed, session_id=sid)
+                    self._log("worker", EventType.WORKER_COMPLETE if result.success else EventType.WORKER_ERROR,
+                              payload={"task_id": node.id, "success": result.success,
+                                       "evidence_count": len(result.evidence)},
+                              cost=result.tokens_used, latency=result.elapsed, session_id=sid)
                     return result
             except asyncio.CancelledError:
                 node.finished_at = time.time()
@@ -544,11 +588,19 @@ class ResearchOrchestrator:
         ])
         for node_id, node, result, vr in batch:
             verifications[node_id] = _to_dict(vr)
+            sid = state.get("session_id", "")
+
+            # Log verification result
             if vr.pass_:
                 node.status = TaskStatus.SUCCESS
             else:
                 node.status = TaskStatus.FAILED
                 node.error_msg = vr.feedback
+            self._log("verifier", EventType.VERIFY_COMPLETE if vr.pass_ else EventType.VERIFY_FAIL,
+                      payload={"task_id": node_id, "pass": vr.pass_, "score": vr.score,
+                               "error_type": vr.error_type.value},
+                      session_id=sid)
+
             self.memory.record_task(
                 task_id=result.task_id,
                 task_name=node.spec.name,
@@ -560,9 +612,18 @@ class ResearchOrchestrator:
                 tokens_used=result.tokens_used,
                 elapsed=result.elapsed,
             )
+            # L3 归档: 成功的任务摘要存入长期经验
+            if vr.pass_ and result.output:
+                l3_text = f"{node.spec.name}: {result.output[:200]}"
+                await self.memory.archive_to_l3(l3_text, {"task": node.spec.name})
 
         # L1 自动压缩（超阈值时 L1→L2）
         self.memory.auto_compress()
+        # L3 持久化 (FAISS 索引 + 元数据写入磁盘)
+        try:
+            self.memory._l3.save()
+        except Exception:
+            pass
 
         return {"plan": plan, "verifications": verifications}
 
@@ -639,6 +700,10 @@ class ResearchOrchestrator:
                 self.replanner.apply_patch(plan, patch)
                 replan_count += 1
                 self.memory.record_replan()
+                self._log("replanner", EventType.REPLAN_PATCH,
+                          payload={"node_id": node_id, "patch_type": patch.patch_type.value,
+                                   "reason": patch.reason[:200]},
+                          session_id=state.get("session_id", ""))
                 if patch.patch_type == PatchType.RETRY:
                     verifications.pop(node_id, None)
 
@@ -700,6 +765,7 @@ class ResearchOrchestrator:
                 verifications=vr_objects,
                 memory_ctx=mem_ctx,
                 stats=stats,
+                on_token=self._on_token,
             )
             final_text = Path(final_path).read_text(encoding="utf-8")
             return {

@@ -26,6 +26,7 @@ from typing import AsyncIterator
 from horizonrl.agent.planner import Planner
 from horizonrl.agent.writer import Writer, WriterConfig
 from horizonrl.config.settings import RootConfig, load_config
+from horizonrl.llm.client import LLMClient
 from horizonrl.logging.trajectory_logger import TrajectoryLogger
 from horizonrl.memory.hierarchical_memory import HierarchicalMemory
 from horizonrl.orchestration.dag_workflow import (
@@ -151,6 +152,7 @@ async def run_research_session(
     semaphore_limit: int = 3,
     max_iterations: int = 10,
     export_dir: str = "reports",
+    on_token=None,  # async callable(str) for token streaming
 ) -> SessionArtifacts:
     """执行一次完整的研究会话 —— CLI / Web / Benchmark 统一入口。
 
@@ -235,21 +237,32 @@ async def run_research_session(
                 config=WriterConfig(export_dir=export_dir),
             )
 
-        # 6. Orchestrator — 全链路 LangGraph DAG
+        # 6. 轨迹日志 — 创建并启动
+        traj_logger = TrajectoryLogger(output_dir="trajectories")
+        traj_sid = await traj_logger.start_session(query)
+        # 统一 sid: logger → service → orchestrator → writer
+        sid = session_id or traj_sid
+        artifacts.session_id = sid
+
+        # 7. Embedding 客户端 — L3 向量检索 (有 Key 则用真实 API, 否则 n-gram)
+        embedding_client = None
+        if config.embedding.api_key:
+            try:
+                embedding_client = LLMClient(config.embedding)
+            except Exception:
+                pass
+
+        # 8. Orchestrator — 注入 logger + embedding 实现 per-node 事件 + L3 真实向量
         orchestrator = ResearchOrchestrator(
             planner=planner,
             tool_manager=tool_manager,
             semaphore_limit=semaphore_limit,
             max_iterations=max_iterations,
             writer=writer,
+            embedding_client=embedding_client,
+            trajectory_logger=traj_logger,
+            on_token=on_token,
         )
-
-        # 7. 轨迹日志 — 使用 logger 的 session_id 统一全链路
-        traj_logger = TrajectoryLogger(output_dir="trajectories")
-        traj_sid = await traj_logger.start_session(query)
-        # 统一 sid: logger → service → orchestrator → writer
-        sid = session_id or traj_sid
-        artifacts.session_id = sid
         state = await orchestrator.run(query, session_id=sid)
 
         # 9. 收集产出
@@ -375,6 +388,10 @@ async def run_research_session(
     except Exception as exc:
         artifacts.error = str(exc)
         artifacts.runtime_ms = (time.monotonic() - t_start) * 1000
+        try:
+            await traj_logger.end_session(success=False)
+        except Exception:
+            pass
 
     return artifacts
 
@@ -392,50 +409,34 @@ async def stream_research_session(
     semaphore_limit: int = 3,
     max_iterations: int = 10,
     export_dir: str = "reports",
+    on_token=None,  # async callable(str) for token streaming
 ) -> AsyncIterator[dict]:
     """流式执行研究会话 — 每完成一个 LangGraph 节点就 yield。
 
     Web SSE 接口调用此函数，逐阶段推送进度。
+    若提供 on_token 回调，Writer LLM 模式时逐 token 调用。
 
     Yields:
-        {"event": "stage"|"done"|"error", "data": {...}}
+        {"event": "stage"|"token"|"done"|"error", "data": {...}}
     """
-    sid = session_id or f"session_{uuid.uuid4().hex[:12]}"
     mode_resolved = resolve_mode(query, mode)
     t_start = time.monotonic()
 
     # ── chat 模式 ──
     if mode_resolved == "chat":
         if llm_client is not None:
-            result = await llm_client.chat(
-                query,
-                system_prompt="你是一个友好、专业的AI助手。用流畅的中文回答用户。",
-            )
+            result = await llm_client.chat(query, system_prompt="你是一个友好、专业的AI助手。")
             text = result.content if result.is_success else query
         else:
             text = "你好！我是 HorizonRL-Agent。试试输入一个研究问题。"
-        yield {
-            "event": "stage",
-            "data": {
-                "session_id": sid,
-                "stage": "chat",
-                "label": "对话模式",
-                "mode_resolved": "chat",
-                "progress": 1.0,
-            },
-        }
-        yield {
-            "event": "done",
-            "data": {
-                "session_id": sid,
-                "mode_resolved": "chat",
-                "final_answer_text": text,
-                "runtime_ms": (time.monotonic() - t_start) * 1000,
-            },
-        }
+        yield {"event": "stage", "data": {"session_id": "chat", "stage": "chat", "label": "对话模式", "progress": 1.0}}
+        yield {"event": "done", "data": {"mode_resolved": "chat", "final_answer_text": text, "runtime_ms": (time.monotonic() - t_start) * 1000}}
         return
 
     # ── deep 模式: 走 Orchestrator.stream() ──
+    traj_logger = TrajectoryLogger(output_dir="trajectories")
+    traj_sid = await traj_logger.start_session(query)
+    sid = session_id or traj_sid  # 使用 logger 的 sid 确保一致
     try:
         if config is None:
             try:
@@ -464,12 +465,23 @@ async def stream_research_session(
                 config=WriterConfig(export_dir=export_dir),
             )
 
+        # Embedding 客户端 — L3 真实向量检索
+        embedding_client = None
+        if config.embedding.api_key:
+            try:
+                embedding_client = LLMClient(config.embedding)
+            except Exception:
+                pass
+
         orchestrator = ResearchOrchestrator(
             planner=planner,
             tool_manager=tool_manager,
             semaphore_limit=semaphore_limit,
             max_iterations=max_iterations,
             writer=writer,
+            embedding_client=embedding_client,
+            trajectory_logger=traj_logger,
+            on_token=on_token,
         )
 
         stage_map = {
@@ -481,19 +493,52 @@ async def stream_research_session(
             "finalize": ("writing", "正在撰写报告", 0.90),
         }
 
-        async for event in orchestrator.stream(query, session_id=sid):
-            for node_name, node_state in event.items():
-                info = stage_map.get(node_name, (node_name, node_name, 0.5))
-                yield {
-                    "event": "stage",
-                    "data": {
-                        "session_id": sid,
-                        "stage": info[0],
-                        "label": info[1],
-                        "progress": info[2],
-                        "node": node_name,
-                    },
-                }
+        async for node_name, node_state in orchestrator.stream(query, session_id=sid):
+            info = stage_map.get(node_name, (node_name, node_name, 0.5))
+            yield {
+                "event": "stage",
+                "data": {
+                    "session_id": sid,
+                    "stage": info[0],
+                    "label": info[1],
+                    "progress": info[2],
+                    "node": node_name,
+                },
+            }
+            # execute_batch 完成后推送工具调用详情
+            if node_name == "execute_batch":
+                results = node_state.get("results", {})
+                for task_id, r in results.items():
+                    if not isinstance(r, dict):
+                        continue
+                    for tc in r.get("tool_calls", []):
+                        yield {
+                            "event": "tool",
+                            "data": {
+                                "session_id": sid,
+                                "task_id": task_id,
+                                "tool_name": tc.get("tool_name", ""),
+                                "success": tc.get("error", "") == "",
+                                "elapsed": tc.get("elapsed", 0),
+                                "tokens": tc.get("tokens_used", 0),
+                            },
+                        }
+            # verify_batch 完成后推送验证结果
+            elif node_name == "verify_batch":
+                verifications = node_state.get("verifications", {})
+                for node_id, v in verifications.items():
+                    if not isinstance(v, dict):
+                        continue
+                    yield {
+                        "event": "verify",
+                        "data": {
+                            "session_id": sid,
+                            "task_id": node_id,
+                            "pass": v.get("pass_", v.get("pass", False)),
+                            "score": v.get("score", 0),
+                            "error_type": v.get("error_type", ""),
+                        },
+                    }
 
         # 收集最终产出
         elapsed = time.monotonic() - t_start
@@ -503,34 +548,16 @@ async def stream_research_session(
         if final_path.exists():
             final_text = final_path.read_text(encoding="utf-8")
 
-        yield {
-            "event": "report_ready",
-            "data": {
-                "session_id": sid,
-                "final_answer_path": str(final_path),
-                "debug_report_path": str(Path(export_dir) / sid / "debug_report.md"),
-            },
-        }
-
-        yield {
-            "event": "done",
-            "data": {
-                "session_id": sid,
-                "mode_resolved": "deep",
-                "final_answer_text": final_text[:500],
-                "runtime_ms": elapsed * 1000,
-            },
-        }
+        await traj_logger.end_session(success=True)
+        yield {"event": "report_ready", "data": {"session_id": sid, "final_answer_path": str(final_path), "debug_report_path": str(Path(export_dir) / sid / "debug_report.md")}}
+        yield {"event": "done", "data": {"session_id": sid, "mode_resolved": "deep", "final_answer_text": final_text[:500], "runtime_ms": elapsed * 1000}}
 
     except Exception as exc:
-        yield {
-            "event": "error",
-            "data": {
-                "session_id": sid,
-                "error": str(exc),
-                "runtime_ms": (time.monotonic() - t_start) * 1000,
-            },
-        }
+        try:
+            await traj_logger.end_session(success=False)
+        except Exception:
+            pass
+        yield {"event": "error", "data": {"session_id": sid, "error": str(exc), "runtime_ms": (time.monotonic() - t_start) * 1000}}
 
 
 # ─── 内部工具 ─────────────────────────────────────────────────────────────────

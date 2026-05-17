@@ -18,26 +18,25 @@ from xml.etree import ElementTree
 # Arxiv API Atom XML namespace
 _ATOM_NS = "http://www.w3.org/2005/Atom"
 
-# API endpoints (tried concurrently)
+# API endpoints — 并发竞速 (FIRST_COMPLETED)
 _ARXIV_ENDPOINTS = [
-    "https://export.arxiv.org/api/query",
-    "https://arxiv.org/api/query",
+    "https://export.arxiv.org/api/query",   # 官方导出端点 (测试可用)
+    "https://arxiv.org/api/query",          # 官方主端点 (自动重定向到 HTTPS)
 ]
 
-# Total timeout for all endpoint attempts combined
-_RACE_TIMEOUT = 4.0
+# Total timeout for all endpoint attempts combined (generous for slow connections)
+_RACE_TIMEOUT = 8.0
 
 
 class ArxivSearchTool:
     """Search arxiv for academic papers with multi-endpoint redundancy.
 
-    Three data sources are tried concurrently:
+    Two API endpoints + arxiv Python package tried concurrently:
+      - export.arxiv.org / arxiv.org (官方端点)
       - arxiv Python package (richest metadata)
-      - export.arxiv.org API
-      - arxiv.org API
 
-    If ALL fail within 8 seconds, meaningful mock paper data is generated
-    so the pipeline never blocks waiting for Arxiv.
+    First valid response wins. Total worst-case latency: _RACE_TIMEOUT seconds.
+    If ALL fail, meaningful mock paper data is generated so the pipeline never blocks.
     """
 
     name = "arxiv_search"
@@ -56,7 +55,7 @@ class ArxivSearchTool:
         Three endpoints fire simultaneously. The first to return valid results
         wins. All pending requests are cancelled immediately.
 
-        Total worst-case latency: _RACE_TIMEOUT seconds (default 8s).
+        Total worst-case latency: _RACE_TIMEOUT seconds.
         """
         limit = max_results or self.max_results
         results = await self._race_endpoints(query, limit)
@@ -175,7 +174,7 @@ class ArxivSearchTool:
             f"&sortBy=relevance&sortOrder=descending"
         )
         try:
-            async with httpx.AsyncClient(timeout=6.0) as client:
+            async with httpx.AsyncClient(timeout=_RACE_TIMEOUT) as client:
                 response = await client.get(
                     url,
                     headers={"User-Agent": "HorizonRL-Agent/0.2"},

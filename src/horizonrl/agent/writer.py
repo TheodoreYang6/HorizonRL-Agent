@@ -19,6 +19,7 @@ v2 核心改进:
 
 from __future__ import annotations
 
+import re
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -90,17 +91,36 @@ def _evidence_ref_text(ev, index: int) -> str:
 
 
 def _collect_evidence(results: dict[str, StepResult]) -> list[dict]:
-    """从 StepResult 中提取去重后的证据列表，供 Writer 各子模块共用。"""
+    """从 StepResult 中提取去重后的证据列表，供 Writer 各子模块共用。
+
+    对内容做清洗：合并换行符为空格，在句子边界智能截断，避免 markdown 渲染混乱。
+    """
     seen = set()
     items = []
     for r in results.values():
         for ev in r.evidence:
-            key = ev.content[:100]
+            # 清洗内容：换行/制表→空格，合并多余空格
+            clean = re.sub(r'[\n\r\t]+', ' ', ev.content)
+            clean = re.sub(r'\s{2,}', ' ', clean).strip()
+            # 智能截断：在句子边界 (。！？.!?) 或空格处断开
+            if len(clean) > 280:
+                chunk = clean[:300]
+                # 优先找句子结束标点
+                m = re.search(r'[。！？](?=[^。！？]*$)', chunk)
+                if not m:
+                    m = re.search(r'[.!?](?=\s|$)(?=[^.!?]*$)', chunk)
+                if m:
+                    clean = chunk[:m.end()] + '...'
+                else:
+                    # 回退：空格处截断
+                    last_space = chunk.rfind(' ')
+                    clean = (chunk[:last_space] if last_space > 200 else chunk[:280]) + '...'
+            key = clean[:120]
             if key not in seen:
                 seen.add(key)
                 items.append({
                     "type": ev.source_type or ev.provider or "unknown",
-                    "content": ev.content,
+                    "content": clean,
                     "source": ev.source or "",
                     "provider": ev.provider or ev.source_type or "",
                     "search_query": ev.search_query or "",
@@ -185,7 +205,7 @@ class DebugReportRenderer:
         lines.append("")
         for i, ev in enumerate(evidence):
             tag = "Mock" if ev.get("is_mock") else ev.get("type", "unknown")
-            lines.append(f"{i+1}. [{tag}] {ev.get('content', '')[:200]}")
+            lines.append(f"{i+1}. [{tag}] {ev.get('content', '')}")
         lines.append("")
 
         # ── 工具调用明细 ──
@@ -255,10 +275,18 @@ class UserAnswerWriter:
         verifications: dict[str, VerificationResult] | None = None,
         memory_ctx: MemoryContext | None = None,
         metadata: ReportMetadata | None = None,
+        on_token=None,  # async callable(str) for token streaming
     ) -> str:
-        """生成 final_answer，LLM 可用时走 LLM，否则模板 fallback。"""
+        """生成 final_answer，LLM 可用时走 LLM，否则模板 fallback。
+
+        on_token: 可选异步回调, 每个 LLM token 调用一次, 用于流式输出。
+        """
         verifications = verifications or {}
         evidence = _collect_evidence(results)
+
+        # Token 流式路径
+        if on_token and self.config.enable_llm_writer and self.llm is not None:
+            return await self._write_stream(query, evidence, metadata, on_token)
 
         # LLM 路径
         if self.config.enable_llm_writer and self.llm is not None:
@@ -270,16 +298,15 @@ class UserAnswerWriter:
         # 模板 fallback
         return self._template_write(query, evidence, metadata)
 
-    async def _llm_write(self, query: str, evidence: list[dict], metadata=None) -> str:
+    def _build_llm_prompt(self, query: str, evidence: list[dict]) -> str:
+        """构建 LLM 写作 prompt (_llm_write 和 _write_stream 共用)。"""
         evidence_text = ""
         for i, ev in enumerate(evidence[:self.config.max_evidence_items]):
             tag = "Mock" if ev.get("is_mock") else ev.get("type", "web")
             evidence_text += f"[{tag}] {ev.get('content', '')[:300]}\n\n"
-
         mock_note = _mock_warning(evidence)
-
         current_date = time.strftime('%Y年%m月%d日')
-        prompt = f"""你是一位科技研究分析师。请根据以下检索到的证据，用流畅的中文回答用户的问题。
+        return f"""你是一位科技研究分析师。请根据以下检索到的证据，用流畅的中文回答用户的问题。
 
 注意: 当前日期是 {current_date}。在讨论"最新进展"、"近期研究"等内容时，请以证据的实际内容和发布日期为准，不要凭训练数据猜测时间。
 
@@ -303,15 +330,38 @@ class UserAnswerWriter:
 
 {mock_note}"""
 
+    async def _llm_write(self, query: str, evidence: list[dict], metadata=None) -> str:
+        prompt = self._build_llm_prompt(query, evidence)
         result = await self.llm.chat(
             prompt,
             system_prompt="你是一个友好、专业的科技研究助手。用流畅的中文回答用户问题。",
-            temperature=0.4,
-            max_tokens=2000,
+            temperature=0.4, max_tokens=2000,
         )
-
         if result.is_success and len(result.content) > 50:
             return result.content
+        return self._template_write(query, evidence, metadata)
+
+    async def _write_stream(
+        self, query: str, evidence: list[dict], metadata=None, on_token=None
+    ) -> str:
+        """LLM 流式写作 — 逐 token 回调, 最后返回完整文本。"""
+        import logging
+        _log = logging.getLogger(__name__)
+        prompt = self._build_llm_prompt(query, evidence)
+        full_text = ""
+        try:
+            async for token in self.llm.chat_stream(
+                prompt, system_prompt="你是一个友好、专业的科技研究助手。用流畅的中文回答用户问题。",
+                temperature=0.4, max_tokens=2000,
+            ):
+                full_text += token
+                if on_token:
+                    await on_token(token)
+        except Exception as e:
+            _log.warning(f"LLM 流式写作失败, 回退模板: {e}")
+
+        if len(full_text) > 50:
+            return full_text
         return self._template_write(query, evidence, metadata)
 
     def _template_write(self, query: str, evidence: list[dict], metadata=None) -> str:
@@ -458,6 +508,7 @@ class Writer:
         verifications: dict[str, VerificationResult] | None = None,
         memory_ctx: MemoryContext | None = None,
         stats: dict | None = None,
+        on_token=None,  # async callable(str) for token streaming
     ) -> tuple[str, str]:
         """生成并保存 final_answer.md 和 debug_report.md。
 
@@ -478,7 +529,7 @@ class Writer:
         )
 
         # 生成两份报告
-        final_md = await self._user.write(query, plan, results, verifications, memory_ctx, meta)
+        final_md = await self._user.write(query, plan, results, verifications, memory_ctx, meta, on_token=on_token)
         debug_md = self._debug.render(query, plan, results, verifications, memory_ctx, stats, meta)
 
         # 保存文件

@@ -342,18 +342,25 @@ class L3EpisodicArchive:
         return self._ngram_embed(text)
 
     def _embed_sync(self, text: str) -> list[float]:
-        """同步生成文本向量。有 API client 时尝试同步调用，否则 n-gram。"""
+        """同步生成文本向量。有 API client 时在线程池中异步调用。"""
         if self._llm_client is not None and hasattr(self._llm_client, "embed"):
             import asyncio
+            import concurrent.futures
             try:
                 loop = asyncio.get_running_loop()
-                # 在已有 event loop 中无法用 asyncio.run()，用 n-gram 兜底
-                return self._ngram_embed(text)
             except RuntimeError:
+                # 无运行中的事件循环，直接用 asyncio.run
                 try:
                     return asyncio.run(self._embed(text))
                 except Exception:
-                    pass
+                    return self._ngram_embed(text)
+            # 有运行中的事件循环 → 在独立线程中跑 asyncio.run
+            try:
+                with concurrent.futures.ThreadPoolExecutor() as pool:
+                    future = pool.submit(asyncio.run, self._embed(text))
+                    return future.result(timeout=15)
+            except Exception:
+                pass
         return self._ngram_embed(text)
 
     def _ngram_embed(self, text: str) -> list[float]:
