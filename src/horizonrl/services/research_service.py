@@ -271,7 +271,7 @@ async def run_research_session(
         replan_count = state.get("replan_count", 0)
         iteration = state.get("iteration", 0)
         error = state.get("error", "")
-        elapsed = time.monotonic() - t_start
+        total_elapsed = time.monotonic() - t_start
 
         # 检测空 PlanGraph (LLM 返回无法解析或 Planner 失败)
         if plan is not None and plan.total_count() == 0 and not error:
@@ -339,9 +339,9 @@ async def run_research_session(
                     if isinstance(state.get("verifications", {}), dict)
                     else {}
                 )
-                elapsed = 0.0
+                node_elapsed = 0.0
                 if node.finished_at and node.started_at:
-                    elapsed = node.finished_at - node.started_at
+                    node_elapsed = node.finished_at - node.started_at
                 td = TaskDetail(
                     task_id=node.id,
                     name=node.spec.name,
@@ -350,7 +350,7 @@ async def run_research_session(
                     passed=node.status.value == "success" if hasattr(node.status, "value") else False,
                     evidence_count=len(r_dict.get("evidence", [])) if isinstance(r_dict, dict) else 0,
                     tool_calls=len(r_dict.get("tool_calls", [])) if isinstance(r_dict, dict) else 0,
-                    elapsed=elapsed,
+                    elapsed=node_elapsed,
                     error_type=v_dict.get("error_type", "") if isinstance(v_dict, dict) else "",
                     feedback=v_dict.get("feedback", "") if isinstance(v_dict, dict) else "",
                 )
@@ -381,7 +381,7 @@ async def run_research_session(
         }
         artifacts.mock_ratio = mock_ratio
         artifacts.tool_calls_count = total_tool_calls
-        artifacts.runtime_ms = elapsed * 1000
+        artifacts.runtime_ms = total_elapsed * 1000
         artifacts.used_search_provider = used_provider
         artifacts.error = error
 
