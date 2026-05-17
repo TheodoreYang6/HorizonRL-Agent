@@ -91,10 +91,12 @@ class TestMockWarning:
         result = _mock_warning(evidence)
         assert "Mock" in result
 
-    def test_partial_mock_no_warning(self):
+    def test_partial_mock_shows_disclosure(self):
         evidence = [{"is_mock": True}, {"is_mock": True}, {"is_mock": False}]
         result = _mock_warning(evidence)
-        assert result == ""  # 只有全部是 mock 才触发
+        assert "数据来源说明" in result
+        assert "2/3" in result
+        assert "模拟数据" in result
 
     def test_no_mock(self):
         evidence = [{"is_mock": False}, {"is_mock": False}]

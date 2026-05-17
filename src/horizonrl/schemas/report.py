@@ -30,7 +30,7 @@ from dataclasses import dataclass, field
 
 @dataclass
 class ReportMetadata:
-    """报告的生成元数据 —— 解决\"年份写成2023、作者是占位符\"问题。
+    """报告的生成元数据。
 
     Attributes:
         session_id: 会话 ID
@@ -38,6 +38,7 @@ class ReportMetadata:
         author: 作者标识
         mode: "user" | "debug"
         used_mock_data: 是否使用了模拟数据
+        mock_ratio: Mock 证据占比 (0.0 ~ 1.0)
         llm_writer_used: Writer 是否使用了 LLM
     """
 
@@ -46,6 +47,7 @@ class ReportMetadata:
     author: str = "HorizonRL-Agent"
     mode: str = "user"
     used_mock_data: bool = False
+    mock_ratio: float = 0.0
     llm_writer_used: bool = False
 
 

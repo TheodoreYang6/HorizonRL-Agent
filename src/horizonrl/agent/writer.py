@@ -52,19 +52,27 @@ class WriterConfig:
 
 
 def _mock_warning(evidence_items: list) -> str:
-    """检测 mock 数据并生成提示。兼容 EvidenceItem 对象和 dict。"""
+    """基于实际 mock_ratio 生成数据来源披露。兼容 EvidenceItem 对象和 dict。"""
     if not evidence_items:
         return ""
+    total = len(evidence_items)
     mock_count = sum(
         1 for e in evidence_items
         if (getattr(e, "is_mock", False) or (isinstance(e, dict) and e.get("is_mock", False)))
     )
-    if mock_count == len(evidence_items):
+    if mock_count == 0:
+        return ""
+    if mock_count == total:
         return (
             "> ⚠️ 当前为离线 Mock 模式，所有搜索结果均为模拟数据。"
             "配置 API Key 后可使用真实搜索。\n\n"
         )
-    return ""
+    real_count = total - mock_count
+    return (
+        f"> ⚠️ 数据来源说明：{mock_count}/{total} 条证据为模拟数据，"
+        f"{real_count}/{total} 条来自真实搜索。"
+        f"部分结论可能受模拟数据影响。\n\n"
+    )
 
 
 def _evidence_ref_text(ev, index: int) -> str:
@@ -301,11 +309,26 @@ class UserAnswerWriter:
     def _build_llm_prompt(self, query: str, evidence: list[dict]) -> str:
         """构建 LLM 写作 prompt (_llm_write 和 _write_stream 共用)。"""
         evidence_text = ""
+        mock_count = 0
         for i, ev in enumerate(evidence[:self.config.max_evidence_items]):
-            tag = "Mock" if ev.get("is_mock") else ev.get("type", "web")
+            is_mock = ev.get("is_mock", False)
+            if is_mock:
+                mock_count += 1
+            tag = "Mock" if is_mock else ev.get("type", "web")
             evidence_text += f"[{tag}] {ev.get('content', '')[:300]}\n\n"
         mock_note = _mock_warning(evidence)
         current_date = time.strftime('%Y年%m月%d日')
+
+        # 部分 mock 时，额外提示 LLM 注意区分
+        mock_guidance = ""
+        if 0 < mock_count < len(evidence[:self.config.max_evidence_items]):
+            mock_guidance = (
+                f"注意：{mock_count}/"
+                f"{len(evidence[:self.config.max_evidence_items])} 条证据标记为 Mock 模拟数据，"
+                "请优先采信标记为非 Mock 的证据，"
+                "对于 Mock 证据中的信息，如果与其他来源一致可以采用，否则请谨慎对待。\n"
+            )
+
         return f"""你是一位科技研究分析师。请根据以下检索到的证据，用流畅的中文回答用户的问题。
 
 注意: 当前日期是 {current_date}。在讨论"最新进展"、"近期研究"等内容时，请以证据的实际内容和发布日期为准，不要凭训练数据猜测时间。
@@ -328,7 +351,7 @@ class UserAnswerWriter:
 - 如果证据显示是模拟数据，不要假装是真实信息
 - 如果有引用证据，在段落中用 [来源] 标记
 
-{mock_note}"""
+{mock_guidance}{mock_note}"""
 
     async def _llm_write(self, query: str, evidence: list[dict], metadata=None) -> str:
         prompt = self._build_llm_prompt(query, evidence)
@@ -494,6 +517,7 @@ class Writer:
             author=self.config.default_author,
             mode="user",
             used_mock_data=(mock_count > 0),
+            mock_ratio=mock_count / len(evidence) if evidence else 0.0,
             llm_writer_used=(self.mode == "llm" and self.llm is not None),
         )
 
@@ -525,6 +549,7 @@ class Writer:
             author=self.config.default_author,
             mode="user",
             used_mock_data=(mock_count > 0),
+            mock_ratio=mock_count / len(evidence) if evidence else 0.0,
             llm_writer_used=(self.mode == "llm" and self.llm is not None),
         )
 
