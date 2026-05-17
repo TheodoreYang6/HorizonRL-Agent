@@ -52,6 +52,8 @@ async def run_benchmark(
     llm_client=None,
     config: RootConfig | None = None,
     category_filter: str | None = None,
+    search_provider: str = "mock",
+    offline: bool = True,
 ) -> tuple[list, object, str]:
     """运行完整 benchmark。
 
@@ -63,6 +65,8 @@ async def run_benchmark(
         llm_client: LLM 客户端，None = 模板模式。
         config: 全局配置。
         category_filter: 只跑指定类别。
+        search_provider: 搜索后端 (mock|auto|bocha|brave|duckduckgo)。
+        offline: 是否离线模式。
 
     Returns:
         (results: list[RunResult], summary: BenchmarkSummary, report: str)
@@ -112,8 +116,8 @@ async def run_benchmark(
                 llm_client=llm_client,
                 config=config,
                 export_dir="reports",
-                search_provider="mock",
-                offline=True,
+                search_provider=search_provider,
+                offline=offline,
                 semaphore_limit=3,
                 max_iterations=10,
             )
@@ -148,6 +152,8 @@ async def main(
     rounds: int = 3,
     use_llm: bool = False,
     tasks_path: str | None = None,
+    search_provider: str = "mock",
+    offline: bool = True,
 ):
     t_start = time.time()
 
@@ -181,6 +187,8 @@ async def main(
         llm_client=llm_client,
         config=cfg,
         category_filter=category,
+        search_provider=search_provider,
+        offline=offline,
     )
 
     # ── 保存结果 ──
@@ -224,9 +232,22 @@ if __name__ == "__main__":
         help="启用 LLM 模式",
     )
     parser.add_argument(
+        "--real", action="store_true",
+        help="使用真实搜索 (默认: mock 离线模式)",
+    )
+    parser.add_argument(
+        "--provider", type=str, default="auto",
+        help="搜索后端: auto|bocha|brave|duckduckgo (默认: auto)",
+    )
+    parser.add_argument(
         "--tasks", type=str, default=None,
         help=f"自定义任务 JSONL 文件 (默认: {DEFAULT_TASKS})",
     )
 
     args = parser.parse_args()
-    asyncio.run(main(args.category, args.rounds, args.llm, args.tasks))
+    search_provider = args.provider if args.real else "mock"
+    offline = not args.real
+    asyncio.run(main(
+        args.category, args.rounds, args.llm, args.tasks,
+        search_provider=search_provider, offline=offline,
+    ))
