@@ -87,3 +87,5 @@ benchmark_results/
 resume_text.txt
 resume_text_new.txt
 scripts/update_resume.py
+data/
+.chromadb/

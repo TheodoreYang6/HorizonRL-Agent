@@ -69,7 +69,7 @@ _RESEARCH_TEMPLATE: list[dict] = [
     {
         "name": "检索最新进展",
         "description": "搜索 '{topic}' 在 {year} 年的最新研究和方法",
-        "tool_names": ["web_search", "arxiv_search"],
+        "tool_names": ["web_search", "paper_search"],
         "depends_on": [],
         "priority": TaskPriority.P0,
     },
@@ -176,7 +176,7 @@ _SUMMARY_TEMPLATE: list[dict] = [
     {
         "name": "多源收集",
         "description": "从多个来源收集 '{topic}' 的相关信息",
-        "tool_names": ["web_search", "arxiv_search"],
+        "tool_names": ["web_search", "paper_search"],
         "depends_on": [],
         "priority": TaskPriority.P0,
     },
@@ -207,7 +207,7 @@ _FACTUAL_QA_TEMPLATE: list[dict] = [
     {
         "name": "交叉验证",
         "description": "用不同来源交叉验证 '{topic}' 的关键事实",
-        "tool_names": ["web_search", "arxiv_search"],
+        "tool_names": ["web_search", "paper_search"],
         "depends_on": [],  # 动态填充
         "priority": TaskPriority.P1,
     },
@@ -415,7 +415,7 @@ class LLMPlanner:
         if task.required_tools:
             tools_hint = f"必须使用的工具: {', '.join(task.required_tools)}"
         else:
-            tools_hint = "可选工具: web_search, arxiv_search, code_execution"
+            tools_hint = "可选工具: web_search, paper_search, code_execution"
 
         return f"""将以下问题拆解为子任务。重点是最大化并行度——互相不依赖的任务必须设为空依赖数组。
 
@@ -465,7 +465,7 @@ JSON:"""
                 name=str(item.get("name", f"子任务{len(specs)+1}")),
                 description=str(item.get("description", "")),
                 tool_names=[t for t in item.get("tool_names", [])
-                           if t in ("web_search", "arxiv_search", "code_execution")],
+                           if t in ("web_search", "paper_search", "code_execution")],
                 depends_on=[],  # 稍后填充
                 priority=priority,
             )

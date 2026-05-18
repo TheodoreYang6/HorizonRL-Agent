@@ -194,8 +194,8 @@ class ToolManager:
         # 默认超时和重试配置
         self._default_timeout: float = 12.0
         self._default_max_retries: int = 1
-        self._circuit_failure_threshold: int = 3
-        self._circuit_cooldown_seconds: float = 30.0
+        self._circuit_failure_threshold: int = 5
+        self._circuit_cooldown_seconds: float = 15.0
 
         if tools_config is not None:
             self._apply_config(tools_config)

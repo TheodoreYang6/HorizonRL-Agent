@@ -1,0 +1,192 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>HorizonRL-Agent | 长链路 AI 研究助手</title>
+<link rel="stylesheet" href="/static/css/style.css">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='6' fill='%23111827'/><text x='50%25' y='55%25' dominant-baseline='middle' text-anchor='middle' font-size='20'>🌌</text></svg>">
+</head>
+<body>
+
+<!-- ═══════════════════════════════════════════════════════════════ -->
+<!-- Toast Container -->
+<!-- ═══════════════════════════════════════════════════════════════ -->
+<div class="toast-container" id="toastContainer"></div>
+
+<!-- ═══════════════════════════════════════════════════════════════ -->
+<!-- Sidebar (Left) -->
+<!-- ═══════════════════════════════════════════════════════════════ -->
+<div class="sidebar" id="sidebar">
+  <div class="sidebar-header">
+    <h2>研究进度</h2>
+    <div class="live-dot" id="liveDot" title="会话状态"></div>
+  </div>
+
+  <!-- Stage Timeline -->
+  <div class="stage-list" id="stageList">
+    <div class="stage-item" id="stage-plan">
+      <div class="stage-indicator">
+        <div class="stage-dot"></div>
+        <div class="stage-line"></div>
+      </div>
+      <div class="stage-info">
+        <div class="stage-name">任务规划</div>
+        <div class="stage-label">等待开始</div>
+      </div>
+    </div>
+
+    <div class="stage-item" id="stage-exec">
+      <div class="stage-indicator">
+        <div class="stage-dot"></div>
+        <div class="stage-line"></div>
+      </div>
+      <div class="stage-info">
+        <div class="stage-name">执行子任务</div>
+        <div class="stage-label">等待中</div>
+        <div class="stage-progress">
+          <div class="stage-progress-bar" id="execProgress"></div>
+        </div>
+      </div>
+    </div>
+
+    <div class="stage-item" id="stage-verify">
+      <div class="stage-indicator">
+        <div class="stage-dot"></div>
+        <div class="stage-line"></div>
+      </div>
+      <div class="stage-info">
+        <div class="stage-name">验证结果</div>
+        <div class="stage-label">等待中</div>
+      </div>
+    </div>
+
+    <div class="stage-item" id="stage-write">
+      <div class="stage-indicator">
+        <div class="stage-dot"></div>
+      </div>
+      <div class="stage-info">
+        <div class="stage-name">撰写报告</div>
+        <div class="stage-label">等待中</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Tool Call Log -->
+  <div class="tool-log" id="toolLog">
+    <div class="section-title">工具调用日志</div>
+  </div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════════════ -->
+<!-- Main Area (Center) -->
+<!-- ═══════════════════════════════════════════════════════════════ -->
+<div class="main">
+  <!-- Header -->
+  <div class="chat-header">
+    <div class="logo">
+      <div class="logo-icon">🌌</div>
+      <h1>HorizonRL-Agent</h1>
+    </div>
+    <span class="badge badge-idle" id="statusBadge">就绪</span>
+  </div>
+
+  <!-- Chat Area -->
+  <div class="chat-area" id="chatArea">
+    <div class="message msg-agent">
+      <div class="bubble">
+        <p>👋 你好！我是 <strong>HorizonRL-Agent</strong>，一个长链路 AI 研究助手。</p>
+        <p></p>
+        <p><strong>💬 对话模式</strong> — 直接问我任何问题</p>
+        <p><strong>🔬 深度研究</strong> — 自动搜索网络和论文，验证后撰写结构化报告</p>
+        <p></p>
+        <p>试试问：</p>
+        <ul>
+          <li>"<strong>Transformer 注意力机制的最新进展</strong>"</li>
+          <li>"<strong>对比 PyTorch 和 TensorFlow 的优缺点</strong>"</li>
+          <li>"<strong>强化学习在 LLM 中的应用综述</strong>"</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+
+  <!-- Input Area -->
+  <div class="input-area">
+    <div class="input-row">
+      <input id="queryInput" type="text"
+             placeholder="输入你想研究的问题..."
+             maxlength="500" autocomplete="off">
+      <select id="modeSel">
+        <option value="auto">🤖 自动</option>
+        <option value="chat">💬 对话</option>
+        <option value="deep">🔬 深度研究</option>
+      </select>
+      <button id="sendBtn">发送</button>
+    </div>
+  </div>
+
+  <!-- Footer -->
+  <div class="footer">
+    HorizonRL-Agent v{{ app_version }} · NWPU · 2026
+  </div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════════════ -->
+<!-- Detail Panel (Right) -->
+<!-- ═══════════════════════════════════════════════════════════════ -->
+<div class="detail-panel" id="detailPanel">
+  <div class="detail-section">
+    <h3>📊 会话统计</h3>
+    <div class="detail-stat">
+      <span class="stat-label">工具调用</span>
+      <span class="stat-value blue" id="statTools">0</span>
+    </div>
+    <div class="detail-stat">
+      <span class="stat-label">成功</span>
+      <span class="stat-value green" id="statSuccess">0</span>
+    </div>
+    <div class="detail-stat">
+      <span class="stat-label">失败</span>
+      <span class="stat-value" id="statFail" style="color: var(--fail)">0</span>
+    </div>
+    <div class="detail-stat">
+      <span class="stat-label">验证次数</span>
+      <span class="stat-value blue" id="statVerifications">0</span>
+    </div>
+    <div class="detail-stat">
+      <span class="stat-label">运行时间</span>
+      <span class="stat-value" id="statRuntime">--</span>
+    </div>
+  </div>
+
+  <div class="detail-section">
+    <h3>🔧 可用工具</h3>
+    <div style="font-size:12px;color:var(--text-secondary);line-height:1.8">
+      <div>🌐 网页搜索 <span style="color:var(--text-muted);font-size:10px">(5 后端竞速)</span></div>
+      <div>📄 学术论文 <span style="color:var(--text-muted);font-size:10px">(Semantic Scholar + OpenAlex)</span></div>
+      <div>💻 代码执行 <span style="color:var(--text-muted);font-size:10px">(AST 安全沙箱)</span></div>
+      <div>🧠 知识检索 <span style="color:var(--text-muted);font-size:10px">(L3 向量搜索)</span></div>
+    </div>
+  </div>
+
+  <div class="detail-section">
+    <h3>⚙️ 系统信息</h3>
+    <div style="font-size:12px;color:var(--text-secondary);line-height:1.8">
+      <div>版本 <span style="color:var(--text-primary);float:right">v{{ app_version }}</span></div>
+      <div>引擎 <span style="color:var(--text-primary);float:right">FastAPI + SSE</span></div>
+      <div>模型 <span style="color:var(--text-primary);float:right">DeepSeek</span></div>
+      <div>验证 <span style="color:var(--text-primary);float:right">9 规则 Hybrid</span></div>
+      <div>记忆 <span style="color:var(--text-primary);float:right">L1 → L2 → L3</span></div>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════════════ -->
+<!-- Scripts -->
+<!-- ═══════════════════════════════════════════════════════════════ -->
+<script src="/static/js/sse-client.js"></script>
+<script src="/static/js/markdown.js"></script>
+<script src="/static/js/app.js"></script>
+
+</body>
+</html>

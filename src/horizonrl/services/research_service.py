@@ -584,11 +584,11 @@ def _build_default_tool_manager(search_provider: str = "auto", offline: bool = F
 
     # Arxiv Search
     try:
-        from horizonrl.tools.arxiv_search import ArxivSearchTool
-        mgr.register("arxiv_search", ArxivSearchTool(max_results=5))
+        from horizonrl.tools.paper_search import PaperSearchTool
+        mgr.register("paper_search", PaperSearchTool(max_results=5))
     except Exception:
-        from horizonrl.tools.mock import MockArxivSearch
-        mgr.register("arxiv_search", MockArxivSearch())
+        from horizonrl.tools.mock import MockPaperSearch
+        mgr.register("paper_search", MockPaperSearch())
 
     # Code Execution
     try:

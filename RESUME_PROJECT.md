@@ -18,15 +18,15 @@
 | 维度 | 说明 |
 |------|------|
 | **领域** | LLM Agent / 多智能体系统 / 自然语言处理 |
-| **学术方向** | 长链路 Agent 稳定执行、分层记忆、验证驱动恢复、Agent 编排 |
-| **目标会议** | AAAI 2027 / IJCAI 2027 / ACL Findings 2027 |
+| **工程方向** | AI 深度研究助手、多智能体编排、分层记忆、验证驱动恢复 |
+| **产品定位** | 面向开发者和知识工作者的私有化 AI 研究工具 |
 | **技术栈** | Python 3.10+, LangGraph, asyncio, FAISS, OpenAI SDK, Pydantic V2 |
 | **开源状态** | GitHub 已发布 (v0.3.0) |
 | **代码规模** | 33 源文件 / 9,251 行源码 / 13 测试文件 / 7 Demo |
 
 ---
 
-## 三、核心技术贡献 (5 项)
+## 三、核心功能特性 (5 项)
 
 ### 1. 分层记忆结构 (Hierarchical Memory: L1 → L2 → L3)
 
@@ -310,46 +310,31 @@ StepResult + EvidenceItem[] (SearchProvenance)
 
 ---
 
-## 九、未来规划 (Phase 3 + Phase 4)
+## 九、产品路线图
 
-### Phase 3: RL 训练管线 (需 GPU: 2×A800 80GB 或 1×A100 80GB)
+### Phase 1: 产品化基础
+- SQLite 会话持久化 (替换内存 SessionManager)
+- ChromaDB 向量数据库 (替换 FAISS 文件读写)
+- 会话历史列表 + 多轮对话
+- GitHub Actions CI/CD
 
-#### 3.1 vLLM 推理部署
-- **目标**: 将 LLM 推理从 API 调用迁移到本地 vLLM 批量推理
-- **接入点**: `src/horizonrl/llm/client.py` — 新增 `vLLMClient` 适配器，保持 OpenAI 兼容接口
-- **优化方向**:
-  - KV Cache 复用: 同一 session 内复用 prefix cache
-  - Continuous Batching: 多 Worker 并发请求合并批量推理
-  - 量化部署: AWQ/GPTQ 4-bit 量化 → 单卡 A100 跑 70B 模型
-- **预期收益**: 推理延迟降低 5-10x，Token 成本降至 0
+### Phase 2: 体验优化
+- 用户 API Key 管理页
+- 报告导出 PDF
+- Markdown 渲染增强 (代码高亮、表格)
+- 研究任务模板 (论文综述 / 技术对比 / 新闻摘要)
 
-#### 3.2 GRPO/PPO RL 训练
-- **训练目标**: 用 GRPO (Group Relative Policy Optimization) 或 PPO 优化 Agent 的策略网络
-- **奖励信号设计**:
-  - 任务完成奖励: Verifier score (0.0-1.0)
-  - 效率奖励: -α × tool_calls (惩罚冗余工具调用)
-  - 稳定性奖励: -β × replan_count (惩罚频繁重规划)
-  - 质量奖励: +γ × citation_support_rate (奖励有据可查的答案)
-- **训练管线**:
-  ```
-  Rollout (vLLM) → Trajectory Collection → Reward Calculation
-      → Advantage Estimation (GAE) → Policy Update (GRPO/PPO) → Repeat
-  ```
-- **课程学习**: easy → medium → hard 任务递进
-- **预期收益**: 长链路任务成功率提升 15-25%
+### Phase 3: 能力扩展
+- 工具插件机制 (用户可注册自定义工具)
+- 更多数据源 (GitHub、RSS、文档)
+- RAG + Agent 混合模式
+- 多语言支持
 
-#### 3.3 基础设施准备
-- vLLM Docker 部署脚本
-- RL 训练配置 (configs/rl.yaml)
-- Trajectory buffer (利用已有 JSONL 日志)
-- 训练监控: TensorBoard + Weights & Biases
-
-### Phase 4: 论文投稿与开源发布
-
-- AAAI 2027 / IJCAI 2027 / ACL Findings 2027 投稿
-- 对比基线: AutoGPT / LangGraph Native / ReAct / Self-Refine / Reflexion
-- 完整消融实验 + 错误分析
-- 开源: 完整代码 + 基准数据 + 复现脚本 + Demo 视频
+### Phase 4: 部署与发布
+- Docker + docker-compose 一键部署
+- Nginx + HTTPS 反向代理
+- 健康检查 + 监控仪表盘
+- GitHub Release v1.0.0
 
 ---
 

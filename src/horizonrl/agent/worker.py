@@ -157,9 +157,9 @@ class AgentWorker:
 
     def _build_params(self, tool_name: str, task: TaskSpec) -> dict:
         """根据工具类型构建合适的参数。"""
-        if tool_name in ("web_search", "arxiv_search", "retrieval"):
+        if tool_name in ("web_search", "arxiv_search", "paper_search", "retrieval"):
             query = self._clean_search_query(task.description)
-            if tool_name == "arxiv_search":
+            if tool_name in ("arxiv_search", "paper_search"):
                 return {"query": query, "max_results": 10}
             elif tool_name == "retrieval":
                 return {"query": query, "top_k": 5}
@@ -258,7 +258,7 @@ class AgentWorker:
                         retrieved_at=now,
                     ))
 
-        elif tool_name == "arxiv_search":
+        elif tool_name in ("arxiv_search", "paper_search"):
             parsed = self._try_parse_json(output)
             if isinstance(parsed, list):
                 for entry in parsed:
@@ -266,8 +266,8 @@ class AgentWorker:
                         items.append(EvidenceItem(
                             content=f"{entry.get('title', '')}: {entry.get('abstract', '')}",
                             source=entry.get("url", entry.get("pdf_url", "")),
-                            source_type="arxiv",
-                            provider=entry.get("provider", "arxiv"),
+                            source_type="paper",
+                            provider=entry.get("provider", "paper_search"),
                             search_query=query_text,
                             is_mock=entry.get("is_mock", False),
                             retrieved_at=now,
@@ -275,9 +275,9 @@ class AgentWorker:
             else:
                 items.append(EvidenceItem(
                     content=output[:2000],
-                    source="arxiv_search",
-                    source_type="arxiv",
-                    provider="arxiv",
+                    source="paper_search",
+                    source_type="paper",
+                    provider="paper_search",
                     is_mock="[Mock]" in output or "模拟" in output,
                     retrieved_at=now,
                 ))
