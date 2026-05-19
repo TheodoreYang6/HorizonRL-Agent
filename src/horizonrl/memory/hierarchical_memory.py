@@ -318,7 +318,7 @@ class L3EpisodicArchive:
 
     def __init__(self, index_path: str = ".memory/episodic_index",
                  embedding_dim: int = 1024,
-                 backend: str = "faiss"):
+                 backend: str = "chromadb"):
         self.index_path = index_path
         self.embedding_dim = embedding_dim
         self._backend = backend
@@ -652,7 +652,7 @@ class HierarchicalMemory:
         )
 
         # L3 经验归档 (默认 FAISS, 可配置切换 ChromaDB)
-        l3_backend = getattr(self.config, 'l3_backend', 'faiss')
+        l3_backend = getattr(self.config, 'l3_backend', 'chromadb')
         l3_path = getattr(self.config, 'l3_index_path', '.memory/episodic_index')
         self._l3 = L3EpisodicArchive(
             index_path=l3_path,

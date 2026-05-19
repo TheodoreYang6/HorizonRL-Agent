@@ -159,8 +159,8 @@ class MemoryConfig(BaseModel):
 
     # ── L3: 经验归档 ──
     l3_backend: str = Field(
-        default="faiss",
-        description="L3 向量存储后端: faiss (默认, 零依赖) | chromadb (推荐生产使用, 支持元数据过滤)",
+        default="chromadb",
+        description="L3 向量存储后端: chromadb (默认, 自动持久化) | faiss (零依赖回退)",
     )
     l3_embedding_model: str = Field(
         default="text-embedding-3-small",

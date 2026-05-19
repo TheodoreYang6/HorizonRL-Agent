@@ -388,7 +388,8 @@ class TestHierarchicalMemory:
         assert ctx.stats["replans"] == 2
 
     def test_get_stats(self):
-        mem = HierarchicalMemory()
+        from horizonrl.config.settings import MemoryConfig
+        mem = HierarchicalMemory(config=MemoryConfig(l3_backend="faiss"))
         mem.record_task(task_id="t1", task_name="T1", output="x", success=True)
         stats = mem.get_stats()
         assert stats["l1_count"] == 1

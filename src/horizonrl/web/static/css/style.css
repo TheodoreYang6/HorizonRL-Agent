@@ -482,6 +482,18 @@ body {
 }
 .theme-toggle:hover { border-color:var(--accent); background:var(--accent-soft); }
 
+.btn-new-chat {
+  padding:4px 12px; border-radius:var(--radius-full);
+  border:1px solid var(--border-subtle); background:var(--bg-card);
+  color:var(--text-secondary); font-family:var(--font);
+  font-size:10px; font-weight:600; cursor:pointer;
+  transition:all var(--fast); white-space:nowrap;
+}
+.btn-new-chat:hover {
+  border-color:var(--success); color:var(--success);
+  background:var(--success-soft);
+}
+
 /* ── Enhanced Code Blocks ─────────────────────────────────────────────── */
 .bubble pre { position:relative; }
 .bubble pre::before {

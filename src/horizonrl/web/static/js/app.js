@@ -434,6 +434,18 @@ function App() {
     }
   }, [s.queryText, s.queryMode, s.running, s.sid, s.stats.runtime, addUserMsg, addBotMsg, addStatus]);
 
+  // 新对话 — 清除上下文，重新开始
+  function newConversation() {
+    if (s.running) { toast('当前研究进行中，请等待完成', 'info'); return; }
+    dispatch({ type: 'SET', payload: {
+      sid: null, messages: [], toolLog: [],
+      stats: { toolCalls:0, toolSuccess:0, toolFail:0, verifications:0, runtime:'--' },
+      stages: init.stages.map(function(x) { return Object.assign({}, x); }),
+      sbDot: '',
+    }});
+    toast('已开启新对话', 'ok');
+  }
+
   // ── Badge ────────────────────────────────────────────────────────
   var badgeClass = s.running ? 'badge-run' : (s.stats.runtime !== '--' ? 'badge-done' : 'badge-idle');
   var badgeText = s.running ? '研究中...' : (s.stats.runtime !== '--' ? '完成' : '就绪');
@@ -589,6 +601,10 @@ function App() {
                     title=${theme==='dark'?'切换亮色主题':'切换暗色主题'}>
               ${theme==='dark'?'☀':' \u{1F319}'}
             </button>
+            ${(s.sid && s.stats.runtime !== '--') && html`
+              <button className="btn-new-chat" onClick=${newConversation} title="开启新对话">
+                新对话
+              </button>`}
             <div className=${'badge ' + badgeClass}>${badgeText}</div>
           </div>
         </header>

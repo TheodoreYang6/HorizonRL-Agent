@@ -37,7 +37,7 @@ class TestConfigModels:
 
     def test_memory_l3_backend_default(self):
         cfg = RootConfig()
-        assert cfg.memory.l3_backend == "faiss"
+        assert cfg.memory.l3_backend == "chromadb"
 
     def test_all_configs_in_root(self):
         cfg = RootConfig()
