@@ -24,33 +24,28 @@ This file provides guidance to Claude Code when working in this repository.
 | 个人偏好 | `CLAUDE.local.md`（git-ignored） |
 | API 配置 | `.env.example` → 复制为 `.env` |
 
-## Development Status (2026-05-19 Day 9 Web 产品化完成)
+## Development Status (2026-05-19 Day 9 — Phase 1+2 完成)
 
 ```
-Phase 1+2: 全部完成 + Day 6-9 产品化增强
+Phase 1: ████████████ 100% (5/5) 产品化基础
+Phase 2: ██████████░░  83% (5/6) 体验优化
 
-Day 6 核心交付:
-  ✅ 共享 Service 层 — CLI/Web/Benchmark 统一走 ResearchOrchestrator
-  ✅ Benchmark 全链路重构 — JSONL 任务 + 结构化 Evaluator (20/20 100%)
-  ✅ L3 Embedding 接入 — DashScope text-embedding-v4
-  ✅ Planner 5 种任务类型 + Paper Search 国内可用
+Day 9 交付:
+  ✅ SQLite 会话持久化 — 双后端(内存+SQLite), 缓存机制, 自动迁移
+  ✅ 会话历史 CRUD — 7 REST 端点, 分页列表, 删除确认
+  ✅ React 18 SPA — htm 零构建, 184KB 本地化, 三栏响应式
+  ✅ ChromaDB 向量数据库 — L3 双后端, 元数据过滤, 自动持久化 (默认)
+  ✅ 100+ 环境变量覆盖 — 全部模块可通过 .env/HORIZON_ 配置
+  ✅ GitHub Actions CI/CD — Test Matrix (3.10-3.13) + lint + benchmark smoke
+  ✅ 论文搜索 5 后端竞速 — OpenAlex‖S2‖Arxiv Pkg‖Arxiv API×2‖Mock
+  ✅ 多轮对话 — 上下文继承, conversation_history 自动追加
+  ✅ PDF 导出 — weasyprint (HTML) → fpdf2 (纯文本回退, 跨平台)
+  ✅ 暗色/亮色主题 — CSS 变量切换 + localStorage 持久化
+  ✅ 研究任务模板 — 5 种模板: 综述/对比/摘要/解释/代码
+  ✅ 新对话按钮 — 清除上下文, 开启全新会话
+  ✅ ruff lint 零错误 — 30+ 文件自动修复
 
-Day 7 核心交付:
-  ✅ FastAPI 架构迁移 — aiohttp → FastAPI + uvicorn
-  ✅ UI v1 — 深邃星空设计系统 + 三栏布局
-
-Day 8 核心交付:
-  ✅ 工程化转型 — 清除论文痕迹，重定位为 AI 深度研究助手产品
-  ✅ 论文搜索根治 — OpenAlex 主力 (国内可用)
-
-Day 9 核心交付:
-  ✅ SQLite 会话持久化 — 双后端(内存+SQLite)，缓存机制，重启不丢失
-  ✅ 会话历史 API — GET/DELETE /api/sessions，分页列表
-  ✅ React 18 前端重写 — htm 零构建，全部静态资源本地化 (184KB)
-  ✅ ChromaDB 向量数据库 — L3 双后端(faiss+chromadb)，元数据过滤，自动持久化
-  ✅ SSE Token 流式 + 阶段时间线 + 工具调用日志
-
-测试: 414 passed, 4 skipped, 0 failed (+59 tests)
+测试: 414 passed, 4 skipped, 0 failed (+59 vs Day 8)
 ```
 
 ## Architecture

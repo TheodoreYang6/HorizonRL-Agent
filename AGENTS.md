@@ -24,18 +24,13 @@ This file provides guidance to Codex when working in this repository.
 | 个人偏好 | `Codex.local.md`（git-ignored） |
 | API 配置 | `.env.example` → 复制为 `.env` |
 
-## Development Status (2026-05-18 Day 8 工程化转型)
+## Development Status (2026-05-19 — Phase 1+2 完成)
 
 ```
-Phase 1+2: 全部完成 + Day 6-8 产品化增强
+Phase 1: 100% 产品化基础 (5/5)
+Phase 2: 83% 体验优化 (5/6)
 
-Day 8 核心交付:
-  ✅ 文档工程化转型 — 清除论文痕迹，重定位为产品
-  ✅ 论文搜索根治 — OpenAlex 主力 (国内可用)
-  ✅ 工具熔断优化 — 阈值调整 + 全局速率限制
-  ✅ FastAPI Web v4 — SSE 防重入 + 下载修复
-
-测试: 355 passed, 4 skipped, 0 failed
+测试: 414 passed, 4 skipped, 0 failed
 ```
 
 ## Architecture
