@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from horizonrl.agent.planner import Planner
-from horizonrl.schemas.task import UserTask, TaskSpec, PlanGraph, TaskPriority
+from horizonrl.schemas.task import PlanGraph, TaskPriority, UserTask
 
 
 class TestPlanner:

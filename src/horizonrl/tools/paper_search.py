@@ -73,7 +73,7 @@ class PaperSearchTool:
 
     def __call__(self, query: str) -> list[dict[str, Any]]:
         try:
-            loop = asyncio.get_running_loop()
+            asyncio.get_running_loop()
         except RuntimeError:
             return asyncio.run(self.search(query))
         import concurrent.futures

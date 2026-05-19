@@ -3,17 +3,13 @@
 from __future__ import annotations
 
 import asyncio
-import pytest
 
 from horizonrl.tools.manager import (
+    CircuitBreaker,
     ToolCallRequest,
     ToolErrorType,
-    ToolStats,
-    CircuitBreaker,
     ToolManager,
 )
-from horizonrl.schemas.result import ToolCall
-
 
 # ─── CircuitBreaker ──────────────────────────────────────────────────────
 

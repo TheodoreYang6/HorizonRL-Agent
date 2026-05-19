@@ -165,7 +165,6 @@ class EvidenceItem:
         if self.provenance:
             p = self.provenance
             provider = p.provider or self.provider or "unknown"
-            tag = "Mock" if (p.is_mock or self.is_mock) else provider
             ts_str = ""
             if p.timestamp:
                 import datetime

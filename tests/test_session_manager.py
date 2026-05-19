@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import time
+
 import pytest
+
 from horizonrl.web.session_manager import (
-    SessionState,
     SessionManager,
+    SessionState,
     SqliteSessionManager,
     create_session_manager,
 )

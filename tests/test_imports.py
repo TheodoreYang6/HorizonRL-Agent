@@ -1,11 +1,9 @@
 """Test that all project dependencies import correctly."""
 
 import importlib
-import sys
 from typing import Any
 
 import pytest
-
 
 # ---------------------------------------------------------------------------
 # Helper
@@ -176,7 +174,7 @@ def test_version_attribute() -> None:
 
 def test_settings_exports_agent_config() -> None:
     """settings module exports AgentConfig and load_config."""
-    from horizonrl.config.settings import AgentConfig, load_config
+    from horizonrl.config.settings import AgentConfig
 
     cfg = AgentConfig()
     assert cfg.debug is False
@@ -187,10 +185,6 @@ def test_hierarchical_memory_exports_class() -> None:
     """hierarchical_memory exports HierarchicalMemory with L1/L2/L3."""
     from horizonrl.memory.hierarchical_memory import (
         HierarchicalMemory,
-        MemoryEntry,
-        MemoryContext,
-        L1RecentWindow,
-        L2SemanticSummary,
     )
 
     mem = HierarchicalMemory()

@@ -22,7 +22,6 @@ from __future__ import annotations
 import time as _time
 from dataclasses import dataclass, field
 
-
 # ╔══════════════════════════════════════════════════════════════════════════════╗
 # ║  ReportMetadata — 报告元数据                                                  ║
 # ╚══════════════════════════════════════════════════════════════════════════════╝

@@ -8,9 +8,9 @@ from pathlib import Path
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
 
-from horizonrl.config.settings import load_config, RootConfig
+from horizonrl.config.settings import RootConfig, load_config
 from horizonrl.services.research_service import resolve_mode
-from horizonrl.web.models import ChatRequest, ChatResponse, AgentResponse, ErrorResponse
+from horizonrl.web.models import AgentResponse, ChatRequest, ChatResponse, ErrorResponse
 
 router = APIRouter()
 

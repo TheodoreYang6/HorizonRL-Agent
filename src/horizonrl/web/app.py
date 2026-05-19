@@ -12,9 +12,9 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
 from horizonrl.web.routes.chat import router as chat_router
-from horizonrl.web.routes.stream import router as stream_router
 from horizonrl.web.routes.report import router as report_router
 from horizonrl.web.routes.sessions import router as sessions_router
+from horizonrl.web.routes.stream import router as stream_router
 from horizonrl.web.session_manager import create_session_manager
 
 # 模块级单例（懒创建，避免 import 时产生 DB 文件）

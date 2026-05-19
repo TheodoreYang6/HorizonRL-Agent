@@ -5,24 +5,23 @@ from __future__ import annotations
 import pytest
 
 from horizonrl.agent.replanner import (
-    Replanner,
-    LLMReplanner,
     ERROR_STRATEGY,
+    LLMReplanner,
+    Replanner,
+)
+from horizonrl.schemas.result import (
+    ErrorType,
+    VerificationResult,
 )
 from horizonrl.schemas.task import (
-    TaskSpec,
+    PatchType,
     PlanGraph,
     PlanNode,
     PlanPatch,
-    PatchType,
-    TaskStatus,
     TaskPriority,
+    TaskSpec,
+    TaskStatus,
 )
-from horizonrl.schemas.result import (
-    VerificationResult,
-    ErrorType,
-)
-
 
 # ─── Fixtures ───────────────────────────────────────────────────────────────
 
@@ -498,8 +497,8 @@ class TestFullReplanCycle:
 
 class TestLLMReplanner:
     def test_init_with_llm_client(self):
-        from horizonrl.llm.client import LLMClient
         from horizonrl.config.settings import LLMConfig
+        from horizonrl.llm.client import LLMClient
 
         config = LLMConfig(
             provider="openai",
@@ -516,8 +515,8 @@ class TestLLMReplanner:
     @pytest.mark.asyncio
     async def test_replan_async_falls_back_on_llm_error(self, simple_graph):
         """LLM 不可用时回退到规则生成。"""
-        from horizonrl.llm.client import LLMClient
         from horizonrl.config.settings import LLMConfig
+        from horizonrl.llm.client import LLMClient
 
         config = LLMConfig(
             provider="openai",

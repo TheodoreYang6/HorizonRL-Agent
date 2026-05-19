@@ -71,7 +71,7 @@ class ArxivSearchTool:
     def __call__(self, query: str) -> list[dict[str, Any]]:
         """Synchronous interface — safe from any context."""
         try:
-            loop = asyncio.get_running_loop()
+            asyncio.get_running_loop()
         except RuntimeError:
             return asyncio.run(self.search(query))
         import concurrent.futures

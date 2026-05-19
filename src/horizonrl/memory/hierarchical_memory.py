@@ -374,7 +374,7 @@ class L3EpisodicArchive:
             import asyncio
             import concurrent.futures
             try:
-                loop = asyncio.get_running_loop()
+                asyncio.get_running_loop()
             except RuntimeError:
                 # 无运行中的事件循环，直接用 asyncio.run
                 try:
@@ -550,7 +550,6 @@ class L3EpisodicArchive:
 
     def _build_index(self, initial_vectors=None) -> None:
         """构建 FAISS 索引 (lazy)。"""
-        import numpy as np
         try:
             import faiss
             self._index = faiss.IndexFlatL2(self.embedding_dim)
@@ -567,7 +566,10 @@ class L3EpisodicArchive:
         if self._index is None or not self._dirty:
             return
         try:
-            import faiss, json, os
+            import json
+            import os
+
+            import faiss
             os.makedirs(os.path.dirname(self.index_path), exist_ok=True)
             faiss.write_index(self._index, f"{self.index_path}.faiss")
             meta = [
@@ -584,15 +586,17 @@ class L3EpisodicArchive:
         """从磁盘加载 (ChromaDB 自动处理, FAISS 手动读取)。"""
         if self._init_chromadb():
             return self._chroma.load()
-        import numpy as np
         try:
-            import faiss, json, os
+            import json
+            import os
+
+            import faiss
             idx_path = f"{self.index_path}.faiss"
             meta_path = f"{self.index_path}.json"
             if not os.path.exists(idx_path) or not os.path.exists(meta_path):
                 return False
             self._index = faiss.read_index(idx_path)
-            with open(meta_path, "r", encoding="utf-8") as f:
+            with open(meta_path, encoding="utf-8") as f:
                 meta = json.load(f)
             self._entries = [
                 {"text": m["text"], "vector": [], "metadata": m.get("metadata", {}), "ts": m.get("ts", 0)}
@@ -635,9 +639,9 @@ class HierarchicalMemory:
     """
 
     def __init__(self, config: MemoryConfig | None = None):
-        from horizonrl.config.settings import MemoryConfig as MC
+        from horizonrl.config.settings import MemoryConfig
 
-        self.config = config or MC()
+        self.config = config or MemoryConfig()
 
         self.l1 = L1RecentWindow(
             max_tokens=self.config.l1_max_tokens,

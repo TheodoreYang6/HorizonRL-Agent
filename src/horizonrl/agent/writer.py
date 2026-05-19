@@ -21,12 +21,12 @@ from __future__ import annotations
 
 import re
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
 
 from horizonrl.schemas.report import ReportMetadata
-from horizonrl.schemas.result import StepResult, VerificationResult, EvidenceItem, SearchProvenance
+from horizonrl.schemas.result import StepResult, VerificationResult
 from horizonrl.schemas.task import PlanGraph
 
 if TYPE_CHECKING:
@@ -176,8 +176,8 @@ class DebugReportRenderer:
         lines.append("")
         success_count = sum(1 for t in tasks if t["passed"])
         if stats:
-            lines.append(f"| 指标 | 数值 |")
-            lines.append(f"|------|------|")
+            lines.append("| 指标 | 数值 |")
+            lines.append("|------|------|")
             lines.append(f"| 子任务 | {stats.get('total_count', len(tasks))} |")
             lines.append(f"| 成功 | {success_count} |")
             lines.append(f"| 轮次 | {stats.get('rounds', '?')} |")
@@ -465,7 +465,7 @@ class UserAnswerWriter:
 
         if metadata:
             lines.append("---")
-            lines.append(f"*本答案由 Horizon-Agent 自动生成*")
+            lines.append("*本答案由 Horizon-Agent 自动生成*")
         return "\n".join(lines)
 
 # ╔══════════════════════════════════════════════════════════════════════════════╗

@@ -5,18 +5,23 @@ from __future__ import annotations
 import pytest
 
 from horizonrl.agent.writer import (
+    DebugReportRenderer,
+    UserAnswerWriter,
     Writer,
     WriterConfig,
-    UserAnswerWriter,
-    DebugReportRenderer,
     _collect_evidence,
-    _mock_warning,
     _evidence_ref_text,
+    _mock_warning,
 )
-from horizonrl.schemas.task import TaskSpec, PlanGraph, PlanNode, TaskStatus
-from horizonrl.schemas.result import StepResult, VerificationResult, EvidenceItem, ErrorType, SearchProvenance
 from horizonrl.schemas.report import ReportMetadata
-
+from horizonrl.schemas.result import (
+    ErrorType,
+    EvidenceItem,
+    SearchProvenance,
+    StepResult,
+    VerificationResult,
+)
+from horizonrl.schemas.task import PlanGraph, PlanNode, TaskSpec, TaskStatus
 
 # ─── Fixtures ───────────────────────────────────────────────────────────────
 
@@ -160,7 +165,7 @@ class TestDebugReportRenderer:
         assert all("task_id" in t for t in tasks)
 
     def test_collect_evidence_dedup(self):
-        r = DebugReportRenderer()
+        DebugReportRenderer()
         results = {"t1": StepResult(task_id="t1", success=True, evidence=[
             EvidenceItem(content="相同内容", source_type="web"),
             EvidenceItem(content="相同内容", source_type="web"),
@@ -214,7 +219,7 @@ class TestUserAnswerWriter:
         assert "未找到" in report
 
     def test_collect_evidence_dedup(self):
-        w = UserAnswerWriter()
+        UserAnswerWriter()
         results = {"t1": StepResult(task_id="t1", success=True, evidence=[
             EvidenceItem(content="相同", source_type="web"),
             EvidenceItem(content="相同", source_type="web"),
@@ -223,7 +228,7 @@ class TestUserAnswerWriter:
         assert len(evidence) == 1
 
     def test_collect_evidence_groups_by_type(self):
-        w = UserAnswerWriter()
+        UserAnswerWriter()
         results = {"t1": StepResult(task_id="t1", success=True, evidence=[
             EvidenceItem(content="w1", source_type="web"),
             EvidenceItem(content="a1", source_type="arxiv"),
@@ -238,8 +243,8 @@ class TestUserAnswerWriter:
     @pytest.mark.asyncio
     async def test_llm_fallback(self, sample_plan, sample_results):
         """LLM 不可用时回退模板。"""
-        from horizonrl.llm.client import LLMClient
         from horizonrl.config.settings import LLMConfig
+        from horizonrl.llm.client import LLMClient
         config = LLMConfig(provider="openai", model="test", api_key="sk-test", base_url="https://test.local")
         w = UserAnswerWriter(llm_client=LLMClient(config))
         report = await w.write("测试", sample_plan, sample_results)
@@ -299,8 +304,8 @@ class TestWriterOrchestrator:
 
     @pytest.mark.asyncio
     async def test_synthesize_async_llm_fallback(self, sample_plan, sample_results, sample_verifications):
-        from horizonrl.llm.client import LLMClient
         from horizonrl.config.settings import LLMConfig
+        from horizonrl.llm.client import LLMClient
         config = LLMConfig(provider="openai", model="test", api_key="sk-test", base_url="https://test.local")
         writer = Writer(mode="llm", llm_client=LLMClient(config))
         report = await writer.synthesize_async("测试", sample_plan, sample_results, sample_verifications)

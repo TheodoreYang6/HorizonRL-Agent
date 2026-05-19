@@ -10,7 +10,7 @@ from pathlib import Path
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse, StreamingResponse
 
-from horizonrl.config.settings import load_config, RootConfig
+from horizonrl.config.settings import RootConfig, load_config
 from horizonrl.llm.client import LLMClient
 from horizonrl.services.research_service import stream_research_session
 

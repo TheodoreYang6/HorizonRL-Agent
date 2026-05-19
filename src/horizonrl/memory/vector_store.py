@@ -16,7 +16,6 @@ ChromaDB 向量存储 — 替代 FAISS 文件读写的生产级方案。
 
 from __future__ import annotations
 
-import os
 from pathlib import Path
 
 

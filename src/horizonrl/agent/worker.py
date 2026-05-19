@@ -128,7 +128,6 @@ class AgentWorker:
 
         output_text = ""
         tokens = 0
-        error = ""
         success = True
 
         if self.config and getattr(self.config, 'llm', None) and getattr(self.config.llm, 'api_key', None):
@@ -151,11 +150,10 @@ class AgentWorker:
                     tokens = result.tokens_used
                 else:
                     output_text = f"LLM 分析出错: {result.error}"
-                    error = result.error
                     success = False
             except Exception as e:
                 # LLM 异常 → 回退模板分析，不阻塞 pipeline
-                error = str(e)
+                str(e)
 
         # LLM 不可用/无 API Key/调用异常 → 模板分析回退
         if not output_text:
@@ -168,7 +166,6 @@ class AgentWorker:
                 f"3. **建议**: 请基于已收集的证据手动完成最终分析。"
             )
             success = True  # 模板分析视为成功，不触发重规划
-            error = ""
 
         elapsed = time.monotonic() - start
         return StepResult(

@@ -3,12 +3,11 @@
 from __future__ import annotations
 
 import asyncio
-import pytest
 
 from horizonrl.agent.worker import AgentWorker, execute_workers
-from horizonrl.schemas.task import TaskSpec, TaskPriority
-from horizonrl.schemas.result import StepResult, EvidenceItem, ToolCall
-from horizonrl.tools.manager import ToolManager, ToolCallRequest
+from horizonrl.schemas.result import EvidenceItem, StepResult
+from horizonrl.schemas.task import TaskSpec
+from horizonrl.tools.manager import ToolManager
 
 
 class MockTool:

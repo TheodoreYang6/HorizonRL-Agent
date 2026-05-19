@@ -2,19 +2,17 @@
 
 from __future__ import annotations
 
-import asyncio
 import pytest
 
-from horizonrl.agent.verifier import Verifier, RuleEngine, LLMVerifier
+from horizonrl.agent.verifier import RuleEngine, Verifier
 from horizonrl.schemas.result import (
     ErrorType,
-    StepResult,
-    VerificationResult,
     EvidenceItem,
+    StepResult,
     ToolCall,
+    VerificationResult,
 )
-from horizonrl.schemas.task import TaskSpec, TaskPriority
-
+from horizonrl.schemas.task import TaskSpec
 
 # ─── Fixtures ───────────────────────────────────────────────────────────
 
@@ -271,7 +269,8 @@ class TestErrorTypeReplanMapping:
 
     def test_verification_result_is_serializable(self):
         """确保 VerificationResult 可以序列化（供 checkpoint/日志使用）。"""
-        import json, dataclasses
+        import dataclasses
+        import json
         vr = VerificationResult(pass_=True, score=0.8, error_type=ErrorType.NONE,
                                  feedback="OK", evidence_gaps=[], suggested_actions=[])
         d = dataclasses.asdict(vr)

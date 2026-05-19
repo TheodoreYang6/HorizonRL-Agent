@@ -2,19 +2,17 @@
 
 from __future__ import annotations
 
-import asyncio
 import pytest
 
+from horizonrl.config.settings import MemoryConfig
 from horizonrl.memory.hierarchical_memory import (
-    MemoryEntry,
-    MemoryContext,
+    HierarchicalMemory,
     L1RecentWindow,
     L2SemanticSummary,
     L3EpisodicArchive,
-    HierarchicalMemory,
+    MemoryContext,
+    MemoryEntry,
 )
-from horizonrl.config.settings import MemoryConfig
-
 
 # ─── MemoryEntry ─────────────────────────────────────────────────────────────
 
@@ -70,11 +68,10 @@ class TestL1RecentWindow:
     def test_trim_when_over_threshold(self):
         l1 = L1RecentWindow(max_tokens=500, auto_compress_threshold=0.5)
         # 添加大量条目触发阈值
-        overflow = None
         for i in range(50):
             long_output = "数据" * 50
             e = MemoryEntry(task_id=f"t{i}", task_name=f"任务{i}", output=long_output)
-            overflow = l1.add(e)
+            l1.add(e)
         assert l1.usage_ratio <= l1.threshold or len(l1.get_all()) <= 50
 
     def test_trim_returns_overflow(self):
@@ -195,8 +192,8 @@ class TestL2SemanticSummary:
     @pytest.mark.asyncio
     async def test_compress_with_llm_fallback(self):
         """LLM 不可用时回退到模板模式。"""
-        from horizonrl.llm.client import LLMClient
         from horizonrl.config.settings import LLMConfig
+        from horizonrl.llm.client import LLMClient
 
         config = LLMConfig(
             provider="openai", model="test", api_key="sk-test",
@@ -277,7 +274,7 @@ class TestHierarchicalMemory:
         assert mem.l1.count == 1
 
     def test_record_with_step_result(self):
-        from horizonrl.schemas.result import StepResult, EvidenceItem, ToolCall
+        from horizonrl.schemas.result import EvidenceItem, StepResult, ToolCall
 
         mem = HierarchicalMemory()
         result = StepResult(
@@ -295,7 +292,7 @@ class TestHierarchicalMemory:
         assert mem.l1.count == 1
 
     def test_record_with_verification(self):
-        from horizonrl.schemas.result import StepResult, VerificationResult, ErrorType
+        from horizonrl.schemas.result import ErrorType, StepResult, VerificationResult
 
         mem = HierarchicalMemory()
         result = StepResult(task_id="t1", success=False, output="",
@@ -425,8 +422,8 @@ class TestHierarchicalMemory:
         assert "注意力" in results[0]
 
     def test_set_llm(self):
-        from horizonrl.llm.client import LLMClient
         from horizonrl.config.settings import LLMConfig
+        from horizonrl.llm.client import LLMClient
 
         config = LLMConfig(
             provider="openai", model="test", api_key="sk-test",

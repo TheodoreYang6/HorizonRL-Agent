@@ -11,19 +11,18 @@ import pytest
 
 from horizonrl.logging.trajectory_logger import (
     TrajectoryLogger,
-    create_logger,
-    read_session,
-    list_sessions,
     aggregate_stats,
+    create_logger,
     event_type_distribution,
     filter_events,
+    list_sessions,
+    read_session,
 )
 from horizonrl.schemas.event import (
     EventType,
     TrajectoryEvent,
     TrajectorySession,
 )
-
 
 # ─── Fixtures ───────────────────────────────────────────────────────────────
 
@@ -612,7 +611,7 @@ class TestEdgeCases:
     async def test_filename_matches_session_id(self, tmp_dir):
         log = TrajectoryLogger(output_dir=tmp_dir)
         sid = await log.start_session("文件名测试")
-        session = await log.end_session()
+        await log.end_session()
 
         expected_file = Path(tmp_dir) / f"{sid}.jsonl"
         assert expected_file.exists()

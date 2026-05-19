@@ -2,27 +2,21 @@
 
 from __future__ import annotations
 
-import asyncio
-import uuid
 import pytest
 
+from horizonrl.agent.planner import Planner
 from horizonrl.orchestration.dag_workflow import (
     ResearchOrchestrator,
-    create_orchestrator,
     _make_initial_state,
+    create_orchestrator,
 )
 from horizonrl.schemas.task import (
-    UserTask,
-    TaskSpec,
-    TaskPriority,
-    TaskStatus,
-    PlanNode,
     PlanGraph,
+    PlanNode,
+    TaskSpec,
+    TaskStatus,
 )
-from horizonrl.schemas.result import StepResult, EvidenceItem, ToolCall
-from horizonrl.agent.planner import Planner
 from horizonrl.tools.manager import ToolManager
-
 
 # ─── Fixtures ───────────────────────────────────────────────────────────
 
@@ -344,7 +338,7 @@ class TestDeadlockHandling:
 class TestToolManagerIntegration:
     @pytest.mark.asyncio
     async def test_tools_invoked_during_execution(self, orchestrator):
-        state = await orchestrator.run("搜索深度学习优化器")
+        await orchestrator.run("搜索深度学习优化器")
         all_stats = orchestrator.tool_manager.get_all_stats()
         total_calls = sum(s.total_calls for s in all_stats.values())
         assert total_calls > 0

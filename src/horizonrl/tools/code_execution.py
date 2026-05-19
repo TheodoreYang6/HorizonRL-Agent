@@ -14,9 +14,7 @@ import io
 import re
 import sys
 import textwrap
-import time
 import traceback
-
 
 # ── Code templates for auto-generation ─────────────────────────────────
 
@@ -417,7 +415,7 @@ class CodeExecutionTool:
     def __call__(self, code: str) -> dict[str, str]:
         """Synchronous interface — safe from any context."""
         try:
-            loop = asyncio.get_running_loop()
+            asyncio.get_running_loop()
         except RuntimeError:
             return asyncio.run(self.execute(code))
         import concurrent.futures
