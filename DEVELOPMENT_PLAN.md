@@ -81,17 +81,17 @@ Day 9 (05/19): Web 产品化   — SQLite 持久化 · 会话历史 API · React
 ✅ GitHub Actions CI/CD   — 自动测试 + lint + benchmark smoke (Day 9)
 ```
 
-### Phase 2: 体验优化 (2-4 周)
+### Phase 2: 体验优化 (83% 完成)
 
 目标: 用户友好的交互体验
 
 ```
-□ 用户 API Key 管理页    — Web 界面配置 LLM Key，加密存储
-□ 报告导出 PDF           — weasyprint / pandoc 转换
-□ Markdown 渲染增强      — 代码高亮、表格样式、图表支持
-□ 研究任务模板           — 论文综述 / 技术对比 / 新闻摘要
-□ 暗色/亮色主题切换     — CSS 变量一键切换
-□ 多轮对话               — 追问和澄清
+✅ 多轮对话               — 追问和澄清，上下文继承 (Day 9)
+✅ 报告导出 PDF           — Markdown → HTML → weasyprint (Day 9)
+✅ Markdown 渲染增强      — 代码高亮、表格样式、斑马纹 (Day 9)
+✅ 研究任务模板           — 5 种模板: 综述/对比/摘要/解释/代码 (Day 9)
+✅ 暗色/亮色主题切换     — CSS 变量 + localStorage 持久化 (Day 9)
+⬜ 用户 API Key 管理页    — Web 界面配置 LLM Key，加密存储
 ```
 
 ### Phase 3: 能力扩展 (1-2 月)
@@ -133,4 +133,4 @@ Day 9 (05/19): Web 产品化   — SQLite 持久化 · 会话历史 API · React
 
 ---
 
-*本文件 v16.0 — 2026-05-19 Horizon-Agent · Phase 1 完成 · Phase 2 开始*
+*本文件 v17.0 — 2026-05-19 Horizon-Agent · Phase 1 完成 · Phase 2 83%*
