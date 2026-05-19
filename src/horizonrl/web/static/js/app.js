@@ -186,6 +186,7 @@ function App() {
   var statsRef = useRef(s.stats);
   statsRef.current = s.stats;
   var viewedHistSid = useRef(null);
+  var histMsgBaseRef = useRef(0);
 
   // 主题切换
   var _theme = useState(localStorage.getItem('theme') || 'dark'), theme = _theme[0], setTheme = _theme[1];
@@ -255,6 +256,7 @@ function App() {
       // 不清除当前对话 — 在下方追加分隔线和历史会话
       addStatus('正在加载历史会话...');
       viewedHistSid.current = session.session_id;
+      histMsgBaseRef.current = s.messages.length;
       var rt = session.runtime_ms > 0 ? (session.runtime_ms / 1000).toFixed(1) + 's' : '--';
       // 分隔线
       dispatch({ type: 'PUSH_MSG', payload: { type:'status', text:'——— 历史会话: ' + (session.query||'').slice(0,40) + ' ———' } });
@@ -292,14 +294,17 @@ function App() {
       var newTotal = s.histTotal - 1;
       var maxPage = Math.max(0, Math.ceil(newTotal / PAGE_SIZE) - 1);
       var page = Math.min(s.histPage, maxPage);
-      // 如果删除的是正在查看的历史会话，清除对应消息
-      var shouldClear = (s.sid === sid) || (viewedHistSid.current === sid);
-      if (shouldClear && viewedHistSid.current === sid) {
+      // 删除的是当前会话 → 全清。删除的是正在查看的历史 → 仅移除历史部分
+      var msgs = s.messages;
+      if (s.sid === sid) {
+        msgs = [];
+      } else if (viewedHistSid.current === sid) {
+        msgs = msgs.slice(0, histMsgBaseRef.current);
         viewedHistSid.current = null;
       }
       dispatch({ type: 'SET', payload: {
         sid: s.sid === sid ? null : s.sid,
-        messages: shouldClear ? [] : s.messages,
+        messages: msgs,
         stats: s.sid === sid ? Object.assign({}, s.stats, { runtime: '--' }) : s.stats,
       } });
       await loadHistory(page);
