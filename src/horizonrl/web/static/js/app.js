@@ -169,8 +169,6 @@ function timeAgo(ts) {
 function downloadsHtml(sid) {
   return '<a class="dl-btn final" href="/api/download/' + sid + '/final" download="final_answer.md">'
     + '<span class="dl-title">下载研究报告</span><span class="dl-sub">Markdown</span>'
-    + '</a><a class="dl-btn pdf" href="/api/download/' + sid + '/pdf" download="report.pdf">'
-    + '<span class="dl-title">导出 PDF</span><span class="dl-sub">pdf</span>'
     + '</a><a class="dl-btn debug" href="/api/download/' + sid + '/debug" download="debug_report.md">'
     + '<span class="dl-title">调试报告</span><span class="dl-sub">debug_report.md</span></a>';
 }
@@ -187,6 +185,7 @@ function App() {
   var bufRef = useRef('');
   var statsRef = useRef(s.stats);
   statsRef.current = s.stats;
+  var viewedHistSid = useRef(null);
 
   // 主题切换
   var _theme = useState(localStorage.getItem('theme') || 'dark'), theme = _theme[0], setTheme = _theme[1];
@@ -255,6 +254,7 @@ function App() {
     if (session.status === 'completed' || session.status === 'failed') {
       // 不清除当前对话 — 在下方追加分隔线和历史会话
       addStatus('正在加载历史会话...');
+      viewedHistSid.current = session.session_id;
       var rt = session.runtime_ms > 0 ? (session.runtime_ms / 1000).toFixed(1) + 's' : '--';
       // 分隔线
       dispatch({ type: 'PUSH_MSG', payload: { type:'status', text:'——— 历史会话: ' + (session.query||'').slice(0,40) + ' ———' } });
@@ -292,9 +292,14 @@ function App() {
       var newTotal = s.histTotal - 1;
       var maxPage = Math.max(0, Math.ceil(newTotal / PAGE_SIZE) - 1);
       var page = Math.min(s.histPage, maxPage);
+      // 如果删除的是正在查看的历史会话，清除对应消息
+      var shouldClear = (s.sid === sid) || (viewedHistSid.current === sid);
+      if (shouldClear && viewedHistSid.current === sid) {
+        viewedHistSid.current = null;
+      }
       dispatch({ type: 'SET', payload: {
         sid: s.sid === sid ? null : s.sid,
-        messages: s.sid === sid ? [] : s.messages,
+        messages: shouldClear ? [] : s.messages,
         stats: s.sid === sid ? Object.assign({}, s.stats, { runtime: '--' }) : s.stats,
       } });
       await loadHistory(page);

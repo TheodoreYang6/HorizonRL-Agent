@@ -42,7 +42,6 @@ class SessionStatusResponse(BaseModel):
     final_answer: str | None = None
     download_url_final: str | None = None
     download_url_debug: str | None = None
-    download_url_pdf: str | None = None
     runtime_ms: float | None = None
     final_path: str | None = None
     debug_path: str | None = None
