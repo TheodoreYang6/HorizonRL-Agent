@@ -38,11 +38,11 @@ Day 9 交付:
   ✅ 100+ 环境变量覆盖 — 全部模块可通过 .env/HORIZON_ 配置
   ✅ GitHub Actions CI/CD — Test Matrix (3.10-3.13) + lint + benchmark smoke
   ✅ 论文搜索 5 后端竞速 — OpenAlex‖S2‖Arxiv Pkg‖Arxiv API×2‖Mock
+  ✅ Research Context Engine — 研究上下文引擎, 语义检索替代文本拼接
   ✅ 多轮对话 — 上下文继承, conversation_history 自动追加
-  ✅ PDF 导出 — weasyprint (HTML) → fpdf2 (纯文本回退, 跨平台)
   ✅ 暗色/亮色主题 — CSS 变量切换 + localStorage 持久化
   ✅ 研究任务模板 — 5 种模板: 综述/对比/摘要/解释/代码
-  ✅ 新对话按钮 — 清除上下文, 开启全新会话
+  ✅ API Key 管理页 — Web 配置, .env 读写
   ✅ ruff lint 零错误 — 30+ 文件自动修复
 
 测试: 414 passed, 4 skipped, 0 failed (+59 vs Day 8)

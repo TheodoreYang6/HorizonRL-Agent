@@ -17,6 +17,47 @@ from horizonrl.services.research_service import stream_research_session
 router = APIRouter()
 
 
+def _store_research_context(
+    session_id: str, query: str, answer: str, mock_ratio: float,
+) -> None:
+    """研究完成后，生成摘要并存入 Research Context Store。"""
+    try:
+        from horizonrl.memory.research_context import get_context_store
+
+        # 提取摘要: 取前200字 + 首段关键发现
+        answer_clean = answer or ""
+        summary = answer_clean[:200]
+        # 尝试提取 "核心结论" 段
+        import re
+        m = re.search(r'核心结论[：:]\s*(.+?)(?:\n\n|\n#|$)', answer_clean, re.DOTALL)
+        if m:
+            summary = m.group(1).strip()[:300]
+
+        # 提取主题词
+        topics = _extract_topics(query)
+
+        store = get_context_store()
+        store.add(
+            session_id=session_id,
+            query=query,
+            summary=summary,
+            topics=topics,
+            evidence_quality=1.0 - mock_ratio,
+        )
+    except Exception:
+        pass  # 摘要失败不影响主流程
+
+
+def _extract_topics(query: str) -> list[str]:
+    """从查询中提取主题词。"""
+    import re
+    # 移除常见停用词后的关键词
+    stop = {"的", "是", "和", "与", "在", "了", "有", "请", "分析",
+            "研究", "搜索", "对比", "总结", "最新", "进展", "如何"}
+    words = re.findall(r'[一-鿿\w]+', query)
+    return [w for w in words if w not in stop and len(w) > 1][:5]
+
+
 def _format_sse(event: str, data: dict) -> str:
     """将事件格式化为 SSE 协议字符串。"""
     payload = json.dumps(data, ensure_ascii=False)
@@ -36,7 +77,6 @@ def _update_session(sm, sid: str, evt_type: str, data: dict):
     elif evt_type == "done":
         session = sm.get(sid)
         if session:
-            # 追加到对话历史（多轮对话用）
             new_history = list(session.conversation_history)
             new_history.append({"role": "user", "content": session.query[:300]})
             new_history.append({"role": "assistant", "content": (data.get("final_answer_text", "") or "")[:500]})
@@ -46,6 +86,12 @@ def _update_session(sm, sid: str, evt_type: str, data: dict):
                 final_answer=data.get("final_answer_text", ""),
                 runtime_ms=data.get("runtime_ms", 0),
                 conversation_history=new_history,
+            )
+            # 存入 Research Context Engine (语义检索用)
+            _store_research_context(
+                sid, session.query,
+                data.get("final_answer_text", ""),
+                data.get("mock_ratio", 0.0),
             )
         else:
             sm.update(

@@ -128,11 +128,22 @@ L3 支持双后端：
 | 代码执行 | AST 启发式检测自然语言输入，5 套代码模板自动生成，安全沙箱执行 |
 | 知识检索 | L3 向量搜索：Embedding API 优先，n-gram MD5 哈希回退 |
 
-### 5. 证据溯源链
+### 5. Research Context Engine（研究上下文引擎）
 
-报告中每个结论都通过 `SearchProvenance` 追溯到原始搜索来源。支持从 `EvidenceItem` → `SearchProvenance` → `ToolCall` → `SearchResult` 的完整溯源链路。Citation Map 将报告声明与证据源自动关联，可用于计算幻觉率和引用支持率。
+多轮追问不再是简单的文本拼接。每次研究完成后，系统自动生成结构化摘要存入 ChromaDB，追问时通过语义检索找到最相关的历史研究作为上下文注入。
 
-### 6. React 前端（零构建）
+```
+研究完成 → LLM 提取摘要 + 主题词 → ChromaDB
+用户追问 → 语义检索 top-2 相关历史 → 注入 prompt
+```
+
+相比原始文本拼接：上下文更精准、Token 消耗更可控、跨会话知识可复用。
+
+### 6. 证据溯源链
+
+报告中每个结论都通过 `SearchProvenance` 追溯到原始搜索来源。支持从 `EvidenceItem` → `SearchProvenance` → `ToolCall` → `SearchResult` 的完整溯源链路。
+
+### 7. React 前端（零构建）
 
 三栏布局：侧栏（进度时间线 + 历史会话）· 主区（聊天 + Markdown 报告）· 详情（实时统计）。
 
@@ -142,7 +153,7 @@ L3 支持双后端：
 - 会话历史管理：SQLite 持久化，分页查询，删除确认
 - 诊断系统：6 步加载追踪，错误边界，骨架屏加载态
 
-### 7. 结构化评测框架
+### 8. 结构化评测框架
 
 40 题 × 5 类别（研究/代码/对比/摘要/问答），JSONL 任务文件，全链路 Evaluator：
 
@@ -186,9 +197,10 @@ src/horizonrl/
 ├── orchestration/     编排层
 │   └── dag_workflow.py  ResearchOrchestrator（LangGraph 6 节点 DAG，全模块注入）
 │
-├── memory/            分层记忆
-│   ├── hierarchical_memory.py  L1 · L2 · L3（FAISS/ChromaDB 双后端）
-│   └── vector_store.py         ChromaDB 封装（自动持久化，元数据过滤）
+├── memory/            记忆系统（双链路）
+│   ├── hierarchical_memory.py  L1·L2·L3 Agent 工作记忆
+│   ├── research_context.py     研究上下文引擎（语义检索）
+│   └── vector_store.py         ChromaDB 封装
 │
 ├── web/               Web 界面 — React 18 SPA + FastAPI
 │   ├── app.py         FastAPI 工厂（lifespan · CORS · 懒加载 SQLite · 测试注入）
@@ -320,7 +332,7 @@ MIT License — 详见 [LICENSE](LICENSE)
 
 **Horizon-Agent** · 溯证智搜
 
-多 Agent 协同 · 三层记忆 · 证据溯源 · 私有化部署
+多 Agent 协同 · 三层记忆 · 研究上下文引擎 · 证据溯源 · 私有化部署
 
 Qiduo Yang · [GitHub](https://github.com/TheodoreYang6)
 

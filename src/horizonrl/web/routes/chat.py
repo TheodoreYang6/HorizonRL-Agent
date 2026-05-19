@@ -63,16 +63,16 @@ async def handle_chat(body: ChatRequest, request: Request):
     resolved = resolve_mode(message, body.mode)
     sm = request.app.state.session_manager
 
-    # 多轮对话：继承已有会话上下文
+    # 多轮对话：继承已有会话上下文 + 语义检索相关历史
     parent_sid = body.session_id or ""
     conversation_history = []
     parent_query = ""
     parent_answer = ""
+    related_contexts = []
 
     if parent_sid and sm.get(parent_sid):
         parent = sm.get(parent_sid)
         if parent and parent.status in ("completed", "failed"):
-            # 继承历史
             conversation_history = list(parent.conversation_history)
             conversation_history.append({
                 "role": "user",
@@ -85,19 +85,44 @@ async def handle_chat(body: ChatRequest, request: Request):
             parent_query = parent.query
             parent_answer = parent.final_answer or ""
 
+        # 语义检索相关历史研究 (Research Context Engine)
+        try:
+            from horizonrl.memory.research_context import get_context_store
+            store = get_context_store()
+            if store.count() > 0:
+                related = store.search(message, top_k=2)
+                related_contexts = [
+                    r for r in related
+                    if r["session_id"] != parent_sid  # 排除当前追问链
+                ]
+        except Exception:
+            pass
+
     if resolved == "chat":
-        if conversation_history:
-            # 多轮 chat：将上下文拼入 prompt
-            ctx = "\n".join(
-                f"{'用户' if h['role']=='user' else '助手'}: {h['content'][:200]}"
-                for h in conversation_history[-4:]
+        ctx_parts = []
+        # 语义相关历史 (优先)
+        for rc in related_contexts[:1]:
+            ctx_parts.append(f"[相关研究] {rc['query'][:100]}: {rc['summary'][:200]}")
+        # 线性对话历史 (补充)
+        for h in conversation_history[-4:]:
+            role = "用户" if h["role"] == "user" else "助手"
+            ctx_parts.append(f"[{role}]: {h['content'][:200]}")
+        if ctx_parts:
+            answer = await _run_chat(
+                "研究上下文:\n" + "\n".join(ctx_parts) + f"\n\n当前问题: {message}"
             )
-            answer = await _run_chat(f"对话历史:\n{ctx}\n\n用户: {message}")
         else:
             answer = await _run_chat(message)
         return ChatResponse(mode="chat", answer=answer).model_dump()
 
-    # deep 模式：创建会话，前端通过 SSE 获取进度
+    # deep 模式: 将语义相关历史注入 conversation_history
+    if related_contexts:
+        for rc in related_contexts:
+            conversation_history.insert(0, {
+                "role": "assistant",
+                "content": f"[相关历史] {rc['query'][:100]}: {rc['summary'][:200]}",
+            })
+
     sid = f"session_{uuid.uuid4().hex[:12]}"
     sm.create(
         sid, message,
