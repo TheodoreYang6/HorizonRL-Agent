@@ -253,20 +253,24 @@ function App() {
       return;
     }
     if (session.status === 'completed' || session.status === 'failed') {
-      dispatch({ type: 'SET', payload: { messages: [] } });
+      // 不清除当前对话 — 在下方追加分隔线和历史会话
+      addStatus('正在加载历史会话...');
+      var rt = session.runtime_ms > 0 ? (session.runtime_ms / 1000).toFixed(1) + 's' : '--';
+      // 分隔线
+      dispatch({ type: 'PUSH_MSG', payload: { type:'status', text:'——— 历史会话: ' + (session.query||'').slice(0,40) + ' ———' } });
       addUserMsg(session.query);
       if (session.status === 'completed') {
         var content = session.final_answer || (session.final_answer_path ? '(报告已生成，点击下方按钮下载)' : '');
-        var rt = session.runtime_ms > 0 ? (session.runtime_ms / 1000).toFixed(1) + 's' : '--';
         addBotMsg(content, downloadsHtml(session.session_id));
         dispatch({ type: 'SET', payload: {
-          sid: session.session_id,
           stats: Object.assign({}, s.stats, { runtime: rt }),
           tab: 'progress', sbDot: 'done',
         } });
       } else {
         addBotMsg('研究失败: ' + (session.error || '未知错误'));
       }
+      // 移除加载状态
+      dispatch({ type: 'POP_MSG_TYPE', payload: 'status' });
     } else if (session.status === 'running') {
       toast('该会话正在运行中', 'info');
     } else {
@@ -752,12 +756,10 @@ function App() {
         </div>
         <div className="sec">
           <h3>可用工具</h3>
-          <div style=${{ fontSize: '11px', color: 'var(--text-secondary)', lineHeight: '2' }}>
-            <div>网页搜索 <span style=${{ color: 'var(--text-muted)', fontSize: '9px' }}>(5 后端竞速)</span></div>
-            <div>学术论文 <span style=${{ color: 'var(--text-muted)', fontSize: '9px' }}>(OpenAlex + S2)</span></div>
-            <div>代码执行 <span style=${{ color: 'var(--text-muted)', fontSize: '9px' }}>(AST 安全沙箱)</span></div>
-            <div>知识检索 <span style=${{ color: 'var(--text-muted)', fontSize: '9px' }}>(L3 向量搜索)</span></div>
-          </div>
+          <div className="stat-row"><span className="sl">网页搜索</span><span className="sv" style=${{fontSize:'10px',color:'var(--text-muted)'}}>5 后端竞速</span></div>
+          <div className="stat-row"><span className="sl">学术论文</span><span className="sv" style=${{fontSize:'10px',color:'var(--text-muted)'}}>OpenAlex + S2 + Arxiv</span></div>
+          <div className="stat-row"><span className="sl">代码执行</span><span className="sv" style=${{fontSize:'10px',color:'var(--text-muted)'}}>AST 安全沙箱</span></div>
+          <div className="stat-row"><span className="sl">知识检索</span><span className="sv" style=${{fontSize:'10px',color:'var(--text-muted)'}}>L3 向量搜索</span></div>
         </div>
         <div className="sec">
           <h3>系统信息</h3>
