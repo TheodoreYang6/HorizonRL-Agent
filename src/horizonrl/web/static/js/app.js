@@ -39,6 +39,14 @@ const HINTS = [
   '强化学习在LLM中的应用综述',
 ];
 
+const TEMPLATES = [
+  { label: '论文综述', icon: ' ', prompt: '请对 {topic} 领域的最新研究进行综述，包括主要方法、关键进展和未来方向' },
+  { label: '技术对比', icon: ' ', prompt: '请对比 {topic} 中不同技术方案的优缺点，包括性能、易用性和适用场景' },
+  { label: '新闻摘要', icon: ' ', prompt: '请总结 {topic} 领域最近的重要新闻和动态，并按主题分类' },
+  { label: '概念解释', icon: ' ', prompt: '请详细解释 {topic}，包括定义、原理、应用场景和相关概念' },
+  { label: '代码分析', icon: ' ', prompt: '请分析 {topic} 的实现方式，提供代码示例并解释关键部分' },
+];
+
 // ── Initial State ──────────────────────────────────────────────────────
 const init = {
   tab: 'progress',
@@ -157,9 +165,11 @@ function timeAgo(ts) {
 }
 function downloadsHtml(sid) {
   return '<a class="dl-btn final" href="/api/download/' + sid + '/final" download>'
-    + '<span class="dl-title">下载研究报告</span><span class="dl-sub">final_answer.md</span>'
+    + '<span class="dl-title">下载研究报告</span><span class="dl-sub">Markdown</span>'
+    + '</a><a class="dl-btn pdf" href="/api/download/' + sid + '/pdf" download>'
+    + '<span class="dl-title">导出 PDF</span><span class="dl-sub">pdf</span>'
     + '</a><a class="dl-btn debug" href="/api/download/' + sid + '/debug" download>'
-    + '<span class="dl-title">下载调试报告</span><span class="dl-sub">debug_report.md</span></a>';
+    + '<span class="dl-title">调试报告</span><span class="dl-sub">debug_report.md</span></a>';
 }
 function uid() { return Date.now() + Math.random(); }
 
@@ -174,6 +184,14 @@ function App() {
   var bufRef = useRef('');
   var statsRef = useRef(s.stats);
   statsRef.current = s.stats;
+
+  // 主题切换
+  var _theme = useState(localStorage.getItem('theme') || 'dark'), theme = _theme[0], setTheme = _theme[1];
+  useEffect(function() {
+    document.documentElement.setAttribute('data-theme', theme);
+    localStorage.setItem('theme', theme);
+  }, [theme]);
+  function toggleTheme() { setTheme(theme === 'dark' ? 'light' : 'dark'); }
 
   var scrollDown = useCallback(function() {
     setTimeout(function() {
@@ -566,7 +584,13 @@ function App() {
             <div className="hb-icon">V</div>
             <h1>Horizon-Agent</h1>
           </div>
-          <div className=${'badge ' + badgeClass}>${badgeText}</div>
+          <div style=${{display:'flex',alignItems:'center',gap:'8px'}}>
+            <button className="theme-toggle" onClick=${toggleTheme}
+                    title=${theme==='dark'?'切换亮色主题':'切换暗色主题'}>
+              ${theme==='dark'?'☀':' \u{1F319}'}
+            </button>
+            <div className=${'badge ' + badgeClass}>${badgeText}</div>
+          </div>
         </header>
 
         <div className="msg-area" ref=${msgRef}>
@@ -576,13 +600,27 @@ function App() {
                 <div className="welcome">
                   <div className="w-icon">~</div>
                   <h2>溯证智搜 · 多 Agent 协同研究</h2>
-                  <p>多 Agent 协同搜索网络和学术论文、交叉验证信息来源、撰写结构化报告。每个结论都可追溯到原始出处。支持 CLI / Web / API 三种使用方式。</p>
+                  <p>多 Agent 协同搜索网络和学术论文、交叉验证信息来源、撰写结构化报告。每个结论都可追溯到原始出处。</p>
+                  <div style=${{marginTop:'12px',fontSize:'11px',color:'var(--text-muted)',marginBottom:'6px'}}>快捷提问</div>
                   <div className="w-hints">
                     ${HINTS.map(function(h) {
                       return html`<span key=${h} className="w-hint" onClick=${function() {
                         dispatch({ type: 'SET', payload: { queryText: h } });
                         setTimeout(function() { send(); }, 50);
                       }}>${h}</span>`;
+                    })}
+                  </div>
+                  <div style=${{marginTop:'16px',fontSize:'11px',color:'var(--text-muted)',marginBottom:'6px'}}>研究模板 (点击后替换 {topic})</div>
+                  <div className="w-hints">
+                    ${TEMPLATES.map(function(t) {
+                      return html`<span key=${t.label} className="w-hint" onClick=${function() {
+                        dispatch({ type: 'SET', payload: { queryText: t.prompt.replace('{topic}', '') } });
+                        // Focus input so user can type their topic
+                        setTimeout(function() {
+                          var inp = document.querySelector('.input-row input');
+                          if (inp) { inp.focus(); inp.setSelectionRange(t.prompt.indexOf('{topic}'), t.prompt.indexOf('{topic}') + 7); }
+                        }, 100);
+                      }}>${t.icon} ${t.label}</span>`;
                     })}
                   </div>
                 </div>`

@@ -104,3 +104,108 @@ async def handle_download(session_id: str, kind: str, request: Request):
         media_type="text/markdown; charset=utf-8",
         headers={"Content-Disposition": f'attachment; filename="{filename}"'},
     )
+
+
+@router.get("/api/download/{session_id}/pdf")
+async def handle_download_pdf(session_id: str, request: Request):
+    """下载 PDF 报告（final_answer.md → HTML → PDF）。
+
+    需要安装 weasyprint: pip install weasyprint
+    """
+    sm = request.app.state.session_manager
+    session = sm.get(session_id)
+
+    if session is None:
+        return JSONResponse(status_code=404, content={"error": "会话不存在"})
+
+    # 查找 markdown 文件
+    filepath = session.final_answer_path
+    if not filepath or not Path(filepath).is_file():
+        found = _find_report_file(session_id, "final")
+        if found:
+            filepath = str(found)
+        else:
+            return JSONResponse(
+                status_code=404,
+                content={"error": "报告未找到，请先完成研究"},
+            )
+
+    # 生成 PDF
+    try:
+        pdf_bytes = _markdown_to_pdf(filepath, session.query or "研究报告")
+    except ImportError:
+        return JSONResponse(
+            status_code=500,
+            content={
+                "error": "PDF 导出需要 weasyprint + GTK 库",
+                "detail": "Ubuntu: apt install libgtk-3-dev && pip install weasyprint",
+            },
+        )
+    except OSError:
+        return JSONResponse(
+            status_code=500,
+            content={
+                "error": "PDF 引擎 GTK 库未安装",
+                "detail": "Ubuntu/Debian: sudo apt install libpango-1.0-0 libgdk-pixbuf2.0-0 libcairo2\n"
+                          "或下载 Markdown 格式后用 pandoc 转换: pandoc report.md -o report.pdf",
+            },
+        )
+    except Exception as e:
+        return JSONResponse(
+            status_code=500,
+            content={"error": "PDF 生成失败", "detail": str(e)},
+        )
+
+    from fastapi.responses import Response
+
+    filename = f"{session.query[:30] or 'report'}.pdf"
+    return Response(
+        content=pdf_bytes,
+        media_type="application/pdf",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+def _markdown_to_pdf(md_path: str | Path, title: str = "研究报告") -> bytes:
+    """将 Markdown 文件转换为 PDF 字节流。
+
+    使用 markdown → HTML → weasyprint 管道。
+    """
+    import markdown
+
+    md_text = Path(md_path).read_text(encoding="utf-8")
+
+    html_body = markdown.markdown(
+        md_text,
+        extensions=["extra", "codehilite", "tables", "toc"],
+    )
+
+    html = f"""<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>{title}</title>
+<style>
+  body {{ font-family: 'Microsoft YaHei', 'PingFang SC', 'Hiragino Sans GB', sans-serif;
+         max-width: 800px; margin: 40px auto; padding: 0 20px;
+         font-size: 14px; line-height: 1.8; color: #333; }}
+  h1 {{ font-size: 22px; border-bottom: 2px solid #58a6ff; padding-bottom: 8px; }}
+  h2 {{ font-size: 18px; margin-top: 24px; color: #1a1a2e; }}
+  h3 {{ font-size: 15px; color: #333; }}
+  code {{ background: #f0f0f0; padding: 2px 6px; border-radius: 3px; font-size: 13px; }}
+  pre {{ background: #1a1a2e; color: #e6edf3; padding: 14px; border-radius: 8px;
+         overflow-x: auto; font-size: 12px; line-height: 1.6; }}
+  blockquote {{ border-left: 3px solid #58a6ff; padding: 6px 14px;
+                color: #555; margin: 12px 0; background: #f8f9fa; }}
+  table {{ border-collapse: collapse; width: 100%; margin: 10px 0; }}
+  th, td {{ border: 1px solid #ddd; padding: 8px 12px; text-align: left; }}
+  th {{ background: #58a6ff; color: #fff; }}
+  a {{ color: #58a6ff; }}
+</style>
+</head>
+<body>{html_body}</body>
+</html>"""
+
+    from weasyprint import HTML
+    doc = HTML(string=html)
+    return doc.write_pdf()
