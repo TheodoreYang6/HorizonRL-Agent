@@ -51,6 +51,7 @@ async def handle_chat(body: ChatRequest, request: Request):
 
     - chat 模式：直接返回 LLM 回答
     - deep 模式：创建会话，返回 session_id 供前端 SSE 订阅
+    - 多轮对话：传入 session_id 则继承父会话上下文
     """
     message = body.message.strip()
     if not message:
@@ -60,13 +61,54 @@ async def handle_chat(body: ChatRequest, request: Request):
         )
 
     resolved = resolve_mode(message, body.mode)
+    sm = request.app.state.session_manager
+
+    # 多轮对话：继承已有会话上下文
+    parent_sid = body.session_id or ""
+    conversation_history = []
+    parent_query = ""
+    parent_answer = ""
+
+    if parent_sid and sm.get(parent_sid):
+        parent = sm.get(parent_sid)
+        if parent and parent.status in ("completed", "failed"):
+            # 继承历史
+            conversation_history = list(parent.conversation_history)
+            conversation_history.append({
+                "role": "user",
+                "content": parent.query[:300],
+            })
+            conversation_history.append({
+                "role": "assistant",
+                "content": (parent.final_answer or "")[:500],
+            })
+            parent_query = parent.query
+            parent_answer = parent.final_answer or ""
 
     if resolved == "chat":
-        answer = await _run_chat(message)
+        if conversation_history:
+            # 多轮 chat：将上下文拼入 prompt
+            ctx = "\n".join(
+                f"{'用户' if h['role']=='user' else '助手'}: {h['content'][:200]}"
+                for h in conversation_history[-4:]
+            )
+            answer = await _run_chat(f"对话历史:\n{ctx}\n\n用户: {message}")
+        else:
+            answer = await _run_chat(message)
         return ChatResponse(mode="chat", answer=answer).model_dump()
 
     # deep 模式：创建会话，前端通过 SSE 获取进度
     sid = f"session_{uuid.uuid4().hex[:12]}"
-    sm = request.app.state.session_manager
-    sm.create(sid, message)
-    return AgentResponse(mode="agent", session_id=sid, status="queued").model_dump()
+    sm.create(
+        sid, message,
+        parent_session_id=parent_sid,
+        conversation_history=conversation_history,
+    )
+    return AgentResponse(
+        mode="agent",
+        session_id=sid,
+        status="queued",
+        # 传递追问上下文给前端
+        **({"parent_query": parent_query, "parent_answer": parent_answer[:300]}
+           if parent_sid else {}),
+    ).model_dump()

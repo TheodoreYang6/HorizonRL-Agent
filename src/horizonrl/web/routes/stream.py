@@ -34,12 +34,26 @@ def _update_session(sm, sid: str, evt_type: str, data: dict):
             debug_report_path=data.get("debug_report_path", ""),
         )
     elif evt_type == "done":
-        sm.update(
-            sid,
-            status="completed",
-            final_answer=data.get("final_answer_text", ""),
-            runtime_ms=data.get("runtime_ms", 0),
-        )
+        session = sm.get(sid)
+        if session:
+            # 追加到对话历史（多轮对话用）
+            new_history = list(session.conversation_history)
+            new_history.append({"role": "user", "content": session.query[:300]})
+            new_history.append({"role": "assistant", "content": (data.get("final_answer_text", "") or "")[:500]})
+            sm.update(
+                sid,
+                status="completed",
+                final_answer=data.get("final_answer_text", ""),
+                runtime_ms=data.get("runtime_ms", 0),
+                conversation_history=new_history,
+            )
+        else:
+            sm.update(
+                sid,
+                status="completed",
+                final_answer=data.get("final_answer_text", ""),
+                runtime_ms=data.get("runtime_ms", 0),
+            )
     elif evt_type == "error":
         sm.update(sid, status="failed", error=data.get("error", ""))
 
@@ -100,6 +114,14 @@ async def handle_stream(session_id: str, request: Request):
 
     # 失败/排队 → 允许重新执行
     query = session.query
+    # 多轮对话：注入历史上下文
+    if session.conversation_history:
+        ctx_parts = []
+        for h in session.conversation_history[-4:]:
+            role_label = "用户" if h["role"] == "user" else "助手"
+            ctx_parts.append(f"[{role_label}]: {h['content'][:300]}")
+        if ctx_parts:
+            query = "对话背景:\n" + "\n".join(ctx_parts) + f"\n\n当前问题: {query}"
     sm.update(session_id, status="running")
     # 重置事件列表（如果是重试）
     session.events.clear()

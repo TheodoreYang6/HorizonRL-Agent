@@ -9,6 +9,7 @@ class ChatRequest(BaseModel):
     """POST /api/chat 请求体。"""
     message: str = Field(..., min_length=1, max_length=500, description="用户输入")
     mode: str = Field(default="auto", pattern="^(auto|chat|deep)$", description="模式")
+    session_id: str | None = Field(default=None, description="多轮对话: 继续已有会话")
 
 
 class ChatResponse(BaseModel):
@@ -19,6 +20,7 @@ class ChatResponse(BaseModel):
 
 class AgentResponse(BaseModel):
     """深度研究模式响应（返回 session_id，前端通过 SSE 订阅进度）。"""
+    model_config = {"extra": "allow"}
     mode: str  # "agent"
     session_id: str
     status: str = "queued"

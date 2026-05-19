@@ -31,6 +31,9 @@ class SessionState:
     runtime_ms: float = 0.0
     error: str = ""
     created_at: float = field(default_factory=time.time)
+    # 多轮对话
+    parent_session_id: str = ""      # 父会话 ID (追问场景)
+    conversation_history: list[dict] = field(default_factory=list)  # [{role, content}]
 
     def to_dict(self) -> dict:
         return {
@@ -46,6 +49,8 @@ class SessionState:
             "runtime_ms": self.runtime_ms,
             "error": self.error,
             "created_at": self.created_at,
+            "parent_session_id": self.parent_session_id,
+            "conversation_history": self.conversation_history,
         }
 
     @classmethod
@@ -56,6 +61,12 @@ class SessionState:
                 events = json.loads(events)
             except (json.JSONDecodeError, TypeError):
                 events = []
+        conversation = d.get("conversation_history", [])
+        if isinstance(conversation, str):
+            try:
+                conversation = json.loads(conversation)
+            except (json.JSONDecodeError, TypeError):
+                conversation = []
         return cls(
             session_id=d.get("session_id", ""),
             query=d.get("query", ""),
@@ -69,6 +80,8 @@ class SessionState:
             runtime_ms=d.get("runtime_ms", 0.0),
             error=d.get("error", ""),
             created_at=d.get("created_at", time.time()),
+            parent_session_id=d.get("parent_session_id", ""),
+            conversation_history=conversation,
         )
 
 
@@ -98,8 +111,14 @@ class SessionManager:
     def get(self, sid: str) -> SessionState | None:
         return self._sessions.get(sid)
 
-    def create(self, sid: str, query: str) -> SessionState:
-        state = SessionState(session_id=sid, query=query)
+    def create(self, sid: str, query: str,
+               parent_session_id: str = "",
+               conversation_history: list[dict] | None = None) -> SessionState:
+        state = SessionState(
+            session_id=sid, query=query,
+            parent_session_id=parent_session_id,
+            conversation_history=conversation_history or [],
+        )
         self._sessions[sid] = state
         return state
 
@@ -182,7 +201,9 @@ class SqliteSessionManager:
                     runtime_ms REAL DEFAULT 0.0,
                     error TEXT DEFAULT '',
                     created_at REAL NOT NULL,
-                    updated_at REAL NOT NULL
+                    updated_at REAL NOT NULL,
+                    parent_session_id TEXT DEFAULT '',
+                    conversation_json TEXT DEFAULT '[]'
                 )
             """)
             conn.execute("""
@@ -208,24 +229,33 @@ class SqliteSessionManager:
                 return None
             d = dict(row)
             d["events"] = d.pop("events_json", "[]")
+            d["conversation_history"] = d.pop("conversation_json", "[]")
             state = SessionState.from_dict(d)
             self._cache[sid] = state
             return state
 
-    def create(self, sid: str, query: str) -> SessionState:
+    def create(self, sid: str, query: str,
+               parent_session_id: str = "",
+               conversation_history: list[dict] | None = None) -> SessionState:
         now = time.time()
-        state = SessionState(session_id=sid, query=query, created_at=now)
+        state = SessionState(
+            session_id=sid, query=query, created_at=now,
+            parent_session_id=parent_session_id,
+            conversation_history=conversation_history or [],
+        )
         self._cache[sid] = state
         with self._get_conn() as conn:
             conn.execute(
                 """INSERT INTO sessions (session_id, query, status, phase, label,
                    events_json, final_answer, final_answer_path, debug_report_path,
-                   runtime_ms, error, created_at, updated_at)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                   runtime_ms, error, created_at, updated_at,
+                   parent_session_id, conversation_json)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (sid, query, state.status, state.phase, state.label,
                  "[]", state.final_answer, state.final_answer_path,
                  state.debug_report_path, state.runtime_ms, state.error,
-                 now, now),
+                 now, now, parent_session_id,
+                 json.dumps(state.conversation_history, ensure_ascii=False)),
             )
         return state
 
@@ -241,16 +271,18 @@ class SqliteSessionManager:
 
         now = time.time()
         events_json = json.dumps(state.events, ensure_ascii=False)
+        conv_json = json.dumps(state.conversation_history, ensure_ascii=False)
         with self._get_conn() as conn:
             conn.execute(
                 """UPDATE sessions SET status=?, phase=?, label=?,
                    events_json=?, final_answer=?, final_answer_path=?,
-                   debug_report_path=?, runtime_ms=?, error=?, updated_at=?
+                   debug_report_path=?, runtime_ms=?, error=?, updated_at=?,
+                   parent_session_id=?, conversation_json=?
                    WHERE session_id=?""",
                 (state.status, state.phase, state.label, events_json,
                  state.final_answer, state.final_answer_path,
                  state.debug_report_path, state.runtime_ms, state.error,
-                 now, sid),
+                 now, state.parent_session_id, conv_json, sid),
             )
         return state
 
@@ -261,16 +293,18 @@ class SqliteSessionManager:
             return False
         now = time.time()
         events_json = json.dumps(state.events, ensure_ascii=False)
+        conv_json = json.dumps(state.conversation_history, ensure_ascii=False)
         with self._get_conn() as conn:
             conn.execute(
                 """UPDATE sessions SET status=?, phase=?, label=?,
                    events_json=?, final_answer=?, final_answer_path=?,
-                   debug_report_path=?, runtime_ms=?, error=?, updated_at=?
+                   debug_report_path=?, runtime_ms=?, error=?, updated_at=?,
+                   parent_session_id=?, conversation_json=?
                    WHERE session_id=?""",
                 (state.status, state.phase, state.label, events_json,
                  state.final_answer, state.final_answer_path,
                  state.debug_report_path, state.runtime_ms, state.error,
-                 now, sid),
+                 now, state.parent_session_id, conv_json, sid),
             )
         return True
 
@@ -314,6 +348,7 @@ class SqliteSessionManager:
                     results.append(self._cache[sid])
                 else:
                     d["events"] = d.pop("events_json", "[]")
+                    d["conversation_history"] = d.pop("conversation_json", "[]")
                     results.append(SessionState.from_dict(d))
             return results
 

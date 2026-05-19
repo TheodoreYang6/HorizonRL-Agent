@@ -381,11 +381,20 @@ function App() {
     dispatch({ type: 'SET', payload: { running: true } });
     addStatus('正在分析问题...');
 
+    // 多轮对话：如果已有会话且已完成，作为追问发送
+    var isFollowUp = s.sid && s.stats.runtime !== '--' && !s.running;
+    var body = { message: q, mode: s.queryMode };
+    if (isFollowUp) {
+      body.session_id = s.sid;
+      // 添加分隔提示
+      addStatus('正在基于之前的上下文研究追问...');
+    }
+
     try {
       var r = await fetch('/api/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ message: q, mode: s.queryMode }),
+        body: JSON.stringify(body),
       });
       var d = await r.json();
       if (d.mode === 'chat') {
@@ -395,13 +404,17 @@ function App() {
       } else if (d.mode === 'agent') {
         dispatch({ type: 'SET', payload: { tab: 'progress' } });
         startSSE(q, d.session_id);
+        // 多轮对话：链式显示上下文
+        if (isFollowUp && d.parent_query) {
+          // 在状态消息中显示这是追问
+        }
       }
     } catch (e) {
       dispatch({ type: 'POP_MSG_TYPE', payload: 'status' });
       addBotMsg('请求失败: ' + e.message);
       dispatch({ type: 'SET', payload: { running: false } });
     }
-  }, [s.queryText, s.queryMode, s.running, addUserMsg, addBotMsg, addStatus]);
+  }, [s.queryText, s.queryMode, s.running, s.sid, s.stats.runtime, addUserMsg, addBotMsg, addStatus]);
 
   // ── Badge ────────────────────────────────────────────────────────
   var badgeClass = s.running ? 'badge-run' : (s.stats.runtime !== '--' ? 'badge-done' : 'badge-idle');
