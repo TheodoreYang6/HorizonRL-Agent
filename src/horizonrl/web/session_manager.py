@@ -206,6 +206,12 @@ class SqliteSessionManager:
                     conversation_json TEXT DEFAULT '[]'
                 )
             """)
+            # 迁移: 旧表可能缺少新列
+            existing = {row[1] for row in conn.execute("PRAGMA table_info(sessions)")}
+            if "parent_session_id" not in existing:
+                conn.execute("ALTER TABLE sessions ADD COLUMN parent_session_id TEXT DEFAULT ''")
+            if "conversation_json" not in existing:
+                conn.execute("ALTER TABLE sessions ADD COLUMN conversation_json TEXT DEFAULT '[]'")
             conn.execute("""
                 CREATE INDEX IF NOT EXISTS idx_sessions_status
                 ON sessions(status)

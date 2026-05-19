@@ -34,6 +34,7 @@ class ErrorResponse(BaseModel):
 
 class SessionStatusResponse(BaseModel):
     """GET /api/report/{sid} 响应。"""
+    model_config = {"extra": "allow"}
     status: str
     phase: str = ""
     label: str = ""
@@ -41,6 +42,7 @@ class SessionStatusResponse(BaseModel):
     final_answer: str | None = None
     download_url_final: str | None = None
     download_url_debug: str | None = None
+    download_url_pdf: str | None = None
     runtime_ms: float | None = None
     final_path: str | None = None
     debug_path: str | None = None

@@ -164,11 +164,11 @@ function timeAgo(ts) {
   return new Date(ts * 1000).toLocaleDateString('zh-CN', { month: 'numeric', day: 'numeric' });
 }
 function downloadsHtml(sid) {
-  return '<a class="dl-btn final" href="/api/download/' + sid + '/final" download>'
+  return '<a class="dl-btn final" href="/api/download/' + sid + '/final" download="final_answer.md">'
     + '<span class="dl-title">下载研究报告</span><span class="dl-sub">Markdown</span>'
-    + '</a><a class="dl-btn pdf" href="/api/download/' + sid + '/pdf" download>'
+    + '</a><a class="dl-btn pdf" href="/api/download/' + sid + '/pdf" download="report.pdf">'
     + '<span class="dl-title">导出 PDF</span><span class="dl-sub">pdf</span>'
-    + '</a><a class="dl-btn debug" href="/api/download/' + sid + '/debug" download>'
+    + '</a><a class="dl-btn debug" href="/api/download/' + sid + '/debug" download="debug_report.md">'
     + '<span class="dl-title">调试报告</span><span class="dl-sub">debug_report.md</span></a>';
 }
 function uid() { return Date.now() + Math.random(); }

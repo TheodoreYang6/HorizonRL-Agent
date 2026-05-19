@@ -1,22 +1,21 @@
-"""GET /api/report/{sid} 和 GET /api/download/{sid}/{kind}。"""
+"""GET /api/report/{sid} · GET /api/download/{sid}/{kind} · GET /api/download/{sid}/pdf。"""
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 from fastapi import APIRouter, Request
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, Response
 
 from horizonrl.web.models import SessionStatusResponse
 
 router = APIRouter()
 
-# Writer 默认输出目录，与 stream_research_session 一致
 _DEFAULT_EXPORT_DIR = "reports"
 
 
 def _find_report_file(session_id: str, kind: str) -> Path | None:
-    """查找报告文件：先查会话记录路径，再查默认输出目录。"""
     filename = "final_answer.md" if kind == "final" else "debug_report.md"
     candidate = Path(_DEFAULT_EXPORT_DIR) / session_id / filename
     if candidate.is_file():
@@ -24,9 +23,15 @@ def _find_report_file(session_id: str, kind: str) -> Path | None:
     return None
 
 
+def _safe_filename(text: str, ext: str) -> str:
+    """从文本生成安全的文件名。"""
+    safe = re.sub(r'[\\/:*?"<>|]', '', text)
+    safe = safe.strip().replace(' ', '_')[:50]
+    return f"{safe}.{ext}" if safe else f"report.{ext}"
+
+
 @router.get("/api/report/{session_id}")
 async def handle_report(session_id: str, request: Request):
-    """查询会话状态（页面刷新后恢复进度）。"""
     sm = request.app.state.session_manager
     session = sm.get(session_id)
 
@@ -41,7 +46,6 @@ async def handle_report(session_id: str, request: Request):
     }
 
     if session.status == "completed":
-        # 优先使用会话记录的路径，回退到默认路径
         final_path = session.final_answer_path
         debug_path = session.debug_report_path
         if not final_path or not Path(final_path).is_file():
@@ -55,6 +59,7 @@ async def handle_report(session_id: str, request: Request):
             "final_answer": session.final_answer or "",
             "download_url_final": f"/api/download/{session_id}/final",
             "download_url_debug": f"/api/download/{session_id}/debug",
+            "download_url_pdf": f"/api/download/{session_id}/pdf",
             "runtime_ms": session.runtime_ms,
             "final_path": final_path,
             "debug_path": debug_path,
@@ -65,26 +70,80 @@ async def handle_report(session_id: str, request: Request):
     return SessionStatusResponse(**kwargs)
 
 
+# ── PDF 路由必须在泛型 /{kind} 路由之前 ──────────────────────────────────
+
+@router.get("/api/download/{session_id}/pdf")
+async def handle_download_pdf(session_id: str, request: Request):
+    """下载 PDF 报告。需要 weasyprint + GTK 库 (Linux)。"""
+    sm = request.app.state.session_manager
+    session = sm.get(session_id)
+
+    if session is None:
+        return JSONResponse(status_code=404, content={"error": "会话不存在"})
+
+    filepath = session.final_answer_path
+    if not filepath or not Path(filepath).is_file():
+        found = _find_report_file(session_id, "final")
+        if found:
+            filepath = str(found)
+        else:
+            return JSONResponse(
+                status_code=404,
+                content={"error": "报告未找到，请先完成研究"},
+            )
+
+    try:
+        pdf_bytes = _markdown_to_pdf(filepath, session.query or "研究报告")
+    except ImportError:
+        return JSONResponse(
+            status_code=500,
+            content={
+                "error": "PDF 导出需要 weasyprint",
+                "detail": "Ubuntu: sudo apt install libgtk-3-dev && pip install weasyprint",
+            },
+        )
+    except OSError:
+        return JSONResponse(
+            status_code=500,
+            content={
+                "error": "PDF 引擎 GTK 库未安装",
+                "detail": (
+                    "Ubuntu/Debian: sudo apt install libpango-1.0-0 libgdk-pixbuf2.0-0 libcairo2\n"
+                    "或下载 Markdown 后用 pandoc: pandoc report.md -o report.pdf"
+                ),
+            },
+        )
+    except Exception as e:
+        return JSONResponse(
+            status_code=500,
+            content={"error": "PDF 生成失败", "detail": str(e)},
+        )
+
+    filename = _safe_filename(session.query or "report", "pdf")
+    return Response(
+        content=pdf_bytes,
+        media_type="application/pdf",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+# ── 泛型下载路由 (final / debug) ────────────────────────────────────────
+
 @router.get("/api/download/{session_id}/{kind}")
 async def handle_download(session_id: str, kind: str, request: Request):
-    """下载 Markdown 报告文件（final 或 debug）。
-
-    优先从会话记录路径获取，回退到 reports/{sid}/ 目录查找。
-    """
+    """下载 Markdown 报告 (final 或 debug)。"""
     if kind not in ("final", "debug"):
-        return JSONResponse(status_code=400, content={"error": "无效的文件类型"})
+        return JSONResponse(status_code=400, content={"error": "无效的文件类型，可选: final, debug, pdf"})
 
     sm = request.app.state.session_manager
     session = sm.get(session_id)
 
     if session is None:
-        return JSONResponse(status_code=404, content={"error": "会话不存在，请重新发起研究"})
+        return JSONResponse(status_code=404, content={"error": "会话不存在"})
 
-    # 从会话记录获取路径
     path_attr = "final_answer_path" if kind == "final" else "debug_report_path"
     filepath = getattr(session, path_attr, "")
 
-    # 若路径为空或文件不存在，回退到默认目录查找
     if not filepath or not Path(filepath).is_file():
         found = _find_report_file(session_id, kind)
         if found:
@@ -106,75 +165,13 @@ async def handle_download(session_id: str, kind: str, request: Request):
     )
 
 
-@router.get("/api/download/{session_id}/pdf")
-async def handle_download_pdf(session_id: str, request: Request):
-    """下载 PDF 报告（final_answer.md → HTML → PDF）。
-
-    需要安装 weasyprint: pip install weasyprint
-    """
-    sm = request.app.state.session_manager
-    session = sm.get(session_id)
-
-    if session is None:
-        return JSONResponse(status_code=404, content={"error": "会话不存在"})
-
-    # 查找 markdown 文件
-    filepath = session.final_answer_path
-    if not filepath or not Path(filepath).is_file():
-        found = _find_report_file(session_id, "final")
-        if found:
-            filepath = str(found)
-        else:
-            return JSONResponse(
-                status_code=404,
-                content={"error": "报告未找到，请先完成研究"},
-            )
-
-    # 生成 PDF
-    try:
-        pdf_bytes = _markdown_to_pdf(filepath, session.query or "研究报告")
-    except ImportError:
-        return JSONResponse(
-            status_code=500,
-            content={
-                "error": "PDF 导出需要 weasyprint + GTK 库",
-                "detail": "Ubuntu: apt install libgtk-3-dev && pip install weasyprint",
-            },
-        )
-    except OSError:
-        return JSONResponse(
-            status_code=500,
-            content={
-                "error": "PDF 引擎 GTK 库未安装",
-                "detail": "Ubuntu/Debian: sudo apt install libpango-1.0-0 libgdk-pixbuf2.0-0 libcairo2\n"
-                          "或下载 Markdown 格式后用 pandoc 转换: pandoc report.md -o report.pdf",
-            },
-        )
-    except Exception as e:
-        return JSONResponse(
-            status_code=500,
-            content={"error": "PDF 生成失败", "detail": str(e)},
-        )
-
-    from fastapi.responses import Response
-
-    filename = f"{session.query[:30] or 'report'}.pdf"
-    return Response(
-        content=pdf_bytes,
-        media_type="application/pdf",
-        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
-    )
-
+# ── PDF 生成 ──────────────────────────────────────────────────────────────
 
 def _markdown_to_pdf(md_path: str | Path, title: str = "研究报告") -> bytes:
-    """将 Markdown 文件转换为 PDF 字节流。
-
-    使用 markdown → HTML → weasyprint 管道。
-    """
+    """Markdown → HTML → PDF (weasyprint 管道)。"""
     import markdown
 
     md_text = Path(md_path).read_text(encoding="utf-8")
-
     html_body = markdown.markdown(
         md_text,
         extensions=["extra", "codehilite", "tables", "toc"],
