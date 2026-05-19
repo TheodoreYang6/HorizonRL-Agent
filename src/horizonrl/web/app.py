@@ -14,6 +14,7 @@ from fastapi.templating import Jinja2Templates
 from horizonrl.web.routes.chat import router as chat_router
 from horizonrl.web.routes.report import router as report_router
 from horizonrl.web.routes.sessions import router as sessions_router
+from horizonrl.web.routes.settings import router as settings_router
 from horizonrl.web.routes.stream import router as stream_router
 from horizonrl.web.session_manager import create_session_manager
 
@@ -83,6 +84,7 @@ def create_app(session_mgr=None) -> FastAPI:
     app.include_router(stream_router)
     app.include_router(report_router)
     app.include_router(sessions_router)
+    app.include_router(settings_router)
 
     # 根路由：返回 SPA 页面
     @app.get("/", include_in_schema=False)

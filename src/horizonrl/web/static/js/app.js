@@ -57,6 +57,9 @@ const init = {
   messages: [],
   toasts: [],
   confirm: null,
+  showSettings: false,
+  apiKeys: [],
+  settingsLoading: false,
   sessions: [],
   histPage: 0,
   histTotal: 0,
@@ -446,6 +449,45 @@ function App() {
     toast('已开启新对话', 'ok');
   }
 
+  // ── Settings: API Keys ─────────────────────────────────────────
+  async function loadApiKeys() {
+    dispatch({ type: 'SET', payload: { settingsLoading: true } });
+    try {
+      var r = await fetch('/api/settings/keys');
+      var d = await r.json();
+      dispatch({ type: 'SET', payload: { apiKeys: d.keys || [], settingsLoading: false } });
+    } catch(e) {
+      dispatch({ type: 'SET', payload: { settingsLoading: false } });
+      toast('加载API配置失败', 'err');
+    }
+  }
+  function openSettings() { dispatch({ type: 'SET', payload: { showSettings: true } }); loadApiKeys(); }
+  function closeSettings() { dispatch({ type: 'SET', payload: { showSettings: false } }); }
+
+  async function saveApiKey(provider, keyElId) {
+    var el = document.getElementById(keyElId);
+    var key = el ? el.value.trim() : '';
+    if (!key) { toast('请输入Key', 'err'); return; }
+    try {
+      var r = await fetch('/api/settings/keys', {
+        method: 'POST', headers: {'Content-Type':'application/json'},
+        body: JSON.stringify({provider:provider, key:key}),
+      });
+      var d = await r.json();
+      if (d.ok) { toast(d.masked + ' 已保存', 'ok'); if (el) el.value = ''; loadApiKeys(); }
+      else { toast(d.error || '保存失败', 'err'); }
+    } catch(e) { toast('保存失败: '+e.message, 'err'); }
+  }
+
+  async function deleteApiKey(provider) {
+    try {
+      var r = await fetch('/api/settings/keys/'+provider, {method:'DELETE'});
+      var d = await r.json();
+      if (d.ok) { toast('已删除', 'ok'); loadApiKeys(); }
+      else { toast(d.error||'删除失败', 'err'); }
+    } catch(e) { toast('删除失败: '+e.message, 'err'); }
+  }
+
   // ── Badge ────────────────────────────────────────────────────────
   var badgeClass = s.running ? 'badge-run' : (s.stats.runtime !== '--' ? 'badge-done' : 'badge-idle');
   var badgeText = s.running ? '研究中...' : (s.stats.runtime !== '--' ? '完成' : '就绪');
@@ -550,6 +592,37 @@ function App() {
           </div>
         </div>`}
 
+      ${s.showSettings && html`
+        <div className="dlg-overlay" onClick=${function(e) { if (e.target.className==='dlg-overlay') closeSettings(); }}>
+          <div className="dlg-box" style=${{maxWidth:'560px'}} onClick=${function(e) { e.stopPropagation(); }}>
+            <h3>API Key 配置</h3>
+            <p style=${{marginBottom:'14px'}}>配置各提供商的 API Key 后即可使用真实 LLM 和搜索引擎。Key 保存在 .env 文件中。</p>
+            ${s.settingsLoading ? html`<div className="skel" style=${{height:'200px'}}></div>` : html`
+              <div style=${{maxHeight:'400px',overflowY:'auto'}}>
+                ${s.apiKeys.map(function(ak) {
+                  var inputId = 'keyInput_' + ak.provider;
+                  return html`<div key=${ak.provider} style=${{display:'flex',alignItems:'center',gap:'8px',padding:'8px 0',borderBottom:'1px solid var(--border-subtle)'}}>
+                    <div style=${{flex:1,minWidth:0}}>
+                      <div style=${{fontSize:'12px',fontWeight:600,color:'var(--text-primary)'}}>${ak.label}</div>
+                      <div style=${{fontSize:'10px',color:'var(--text-muted)',marginTop:'2px'}}>
+                        ${ak.configured ? html`<span style=${{color:'var(--success)'}}>已配置: ${ak.masked}</span>` : html`<span style=${{color:'var(--fail)'}}>未配置</span>`}
+                      </div>
+                    </div>
+                    <input id=${inputId} type="password" placeholder="输入新Key..."
+                           style=${{width:'160px',padding:'5px 8px',fontSize:'11px',background:'var(--bg-input)',border:'1px solid var(--border-normal)',borderRadius:'4px',color:'var(--text-primary)',outline:'none'}} />
+                    <button onClick=${function() { saveApiKey(ak.provider, inputId); }}
+                            style=${{padding:'4px 10px',fontSize:'10px',borderRadius:'4px',border:'1px solid var(--accent)',background:'var(--accent-soft)',color:'var(--accent)',cursor:'pointer',fontWeight:600,whiteSpace:'nowrap'}}>保存</button>
+                    ${ak.configured && html`<button onClick=${function() { deleteApiKey(ak.provider); }}
+                            style=${{padding:'4px 8px',fontSize:'10px',borderRadius:'4px',border:'1px solid var(--fail)',background:'transparent',color:'var(--fail)',cursor:'pointer'}}>删除</button>`}
+                  </div>`;
+                })}
+              </div>`}
+            <div className="dlg-acts" style=${{marginTop:'14px'}}>
+              <button className="btn-c" onClick=${closeSettings}>关闭</button>
+            </div>
+          </div>
+        </div>`}
+
       <aside className="sidebar">
         <div className="sidebar-head">
           <h2>${s.tab === 'progress' ? '研究进度' : '历史会话'}</h2>
@@ -597,6 +670,7 @@ function App() {
             <h1>Horizon-Agent</h1>
           </div>
           <div style=${{display:'flex',alignItems:'center',gap:'8px'}}>
+            <button className="theme-toggle" onClick=${openSettings} title="API Key 配置">⚙</button>
             <button className="theme-toggle" onClick=${toggleTheme}
                     title=${theme==='dark'?'切换亮色主题':'切换暗色主题'}>
               ${theme==='dark'?'☀':' \u{1F319}'}
