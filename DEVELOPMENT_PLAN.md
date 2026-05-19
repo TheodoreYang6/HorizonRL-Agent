@@ -69,7 +69,7 @@ Day 9 (05/19): Web 产品化   — SQLite 持久化 · 会话历史 API · React
 
 ## 六、产品路线图
 
-### Phase 1: 产品化基础 (80% 完成)
+### Phase 1: 产品化基础 ✅ 100% 完成
 
 目标: 从 Demo 到可用产品
 
@@ -78,7 +78,7 @@ Day 9 (05/19): Web 产品化   — SQLite 持久化 · 会话历史 API · React
 ✅ 会话历史列表           — React 侧栏双 Tab，支持查看/删除 (Day 9)
 ✅ ChromaDB 向量数据库    — 双后端, 元数据过滤, 自动持久化 (Day 9)
 ✅ 环境变量完善           — 100+ HORIZON_ 变量, 全部模块可配置 (Day 9)
-□ GitHub Actions CI/CD   — 自动测试 + lint
+✅ GitHub Actions CI/CD   — 自动测试 + lint + benchmark smoke (Day 9)
 ```
 
 ### Phase 2: 体验优化 (2-4 周)
@@ -133,4 +133,4 @@ Day 9 (05/19): Web 产品化   — SQLite 持久化 · 会话历史 API · React
 
 ---
 
-*本文件 v15.0 — 2026-05-19 Horizon-Agent · Phase 1 80%*
+*本文件 v16.0 — 2026-05-19 Horizon-Agent · Phase 1 完成 · Phase 2 开始*
