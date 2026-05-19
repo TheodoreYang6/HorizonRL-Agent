@@ -1,4 +1,4 @@
-"""API Key 管理 — GET/POST/DELETE /api/settings/keys。"""
+"""API Key 管理 + 配置预设 — /api/settings/*。"""
 
 from __future__ import annotations
 
@@ -11,7 +11,6 @@ from fastapi.responses import JSONResponse
 
 router = APIRouter()
 
-# 支持的 API Key 提供商
 _PROVIDERS = {
     "deepseek": {"env": "DEEPSEEK_API_KEY", "label": "DeepSeek", "url": "https://api.deepseek.com"},
     "openai": {"env": "OPENAI_API_KEY", "label": "OpenAI", "url": "https://api.openai.com"},
@@ -19,6 +18,44 @@ _PROVIDERS = {
     "dashscope": {"env": "DASHSCOPE_API_KEY", "label": "DashScope (Embedding)", "url": "https://dashscope.aliyuncs.com"},
     "bocha": {"env": "BOCHA_API_KEY", "label": "Bocha (Web搜索)", "url": "https://api.bocha.cn"},
     "brave": {"env": "BRAVE_API_KEY", "label": "Brave (Web搜索)", "url": "https://api.search.brave.com"},
+}
+
+# 配置预设
+PRESETS = {
+    "deep": {
+        "id": "deep", "name": "深度研究", "icon": "🔬", "active": True,
+        "desc": "DeepSeek-V3, 5后端搜索, 最多3 Agent 并发",
+        "env": {
+            "HORIZON_LLM__MODEL": "deepseek-chat",
+            "HORIZON_LLM__TEMPERATURE": "0.3",
+            "HORIZON_AGENT__WORKER_SEMAPHORE_LIMIT": "3",
+            "HORIZON_TOOLS__WEB_SEARCH__ENGINE": "auto",
+            "HORIZON_AGENT__MAX_STEPS": "30",
+        },
+    },
+    "quick": {
+        "id": "quick", "name": "快速对话", "icon": "💬", "active": False,
+        "desc": "DeepSeek-V3, 仅 DDGS 搜索, 单 Agent, 低延迟",
+        "env": {
+            "HORIZON_LLM__MODEL": "deepseek-chat",
+            "HORIZON_LLM__TEMPERATURE": "0.7",
+            "HORIZON_AGENT__WORKER_SEMAPHORE_LIMIT": "1",
+            "HORIZON_TOOLS__WEB_SEARCH__ENGINE": "duckduckgo",
+            "HORIZON_AGENT__MAX_STEPS": "10",
+        },
+    },
+    "eval": {
+        "id": "eval", "name": "评测模式", "icon": "🧪", "active": False,
+        "desc": "确定性温度 0.0, Mock 数据, 严格验证, 4 Agent 并发",
+        "env": {
+            "HORIZON_LLM__TEMPERATURE": "0.0",
+            "HORIZON_AGENT__WORKER_SEMAPHORE_LIMIT": "4",
+            "HORIZON_TOOLS__WEB_SEARCH__ENGINE": "mock",
+            "HORIZON_VERIFIER__STRICT_MODE": "true",
+            "HORIZON_VERIFIER__MIN_EVIDENCE_COUNT": "3",
+            "HORIZON_AGENT__MAX_STEPS": "30",
+        },
+    },
 }
 
 
@@ -139,3 +176,39 @@ async def delete_key(provider: str, request: Request):
     os.environ.pop(env_var, None)
 
     return {"ok": True, "provider": provider, "deleted": True}
+
+
+@router.get("/api/settings/presets")
+async def list_presets(request: Request):
+    """获取所有配置预设及当前激活状态。"""
+    items = []
+    for pid, preset in PRESETS.items():
+        # 检查预设是否与当前环境变量匹配
+        match_count = 0
+        total = len(preset["env"])
+        for k, v in preset["env"].items():
+            if os.environ.get(k, "") == v:
+                match_count += 1
+        items.append({
+            "id": pid,
+            "name": preset["name"],
+            "icon": preset["icon"],
+            "desc": preset["desc"],
+            "active": match_count == total,
+            "match": f"{match_count}/{total}",
+        })
+    return {"presets": items}
+
+
+@router.post("/api/settings/presets/{preset_id}")
+async def apply_preset(preset_id: str, request: Request):
+    """应用配置预设 — 写入 .env + 同步 os.environ。"""
+    if preset_id not in PRESETS:
+        return JSONResponse(status_code=400, content={"error": f"未知预设: {preset_id}"})
+
+    preset = PRESETS[preset_id]
+    _write_env_file(preset["env"])
+
+    # 清除其他预设的激活状态在前端展示
+    return {"ok": True, "preset": preset_id, "name": preset["name"],
+            "applied": list(preset["env"].keys())}

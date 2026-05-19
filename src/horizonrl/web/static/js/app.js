@@ -59,7 +59,9 @@ const init = {
   confirm: null,
   showSettings: false,
   apiKeys: [],
+  presets: [],
   settingsLoading: false,
+  settingsTab: 'presets',
   sessions: [],
   histPage: 0,
   histTotal: 0,
@@ -475,8 +477,24 @@ function App() {
       toast('加载API配置失败', 'err');
     }
   }
-  function openSettings() { dispatch({ type: 'SET', payload: { showSettings: true } }); loadApiKeys(); }
+  function openSettings() { dispatch({ type: 'SET', payload: { showSettings: true } }); loadApiKeys(); loadPresets(); }
   function closeSettings() { dispatch({ type: 'SET', payload: { showSettings: false } }); }
+
+  async function loadPresets() {
+    try {
+      var r = await fetch('/api/settings/presets');
+      var d = await r.json();
+      dispatch({ type: 'SET', payload: { presets: d.presets || [] } });
+    } catch(e) {}
+  }
+  async function applyPreset(pid) {
+    try {
+      var r = await fetch('/api/settings/presets/'+pid, {method:'POST'});
+      var d = await r.json();
+      if (d.ok) { toast('已切换: '+d.name, 'ok'); loadPresets(); }
+      else { toast(d.error||'切换失败', 'err'); }
+    } catch(e) { toast('切换失败', 'err'); }
+  }
 
   async function saveApiKey(provider, keyElId) {
     var el = document.getElementById(keyElId);
@@ -582,6 +600,24 @@ function App() {
       </div>`;
   }
 
+  // ── Settings Helpers ────────────────────────────────────────────
+  function tabStyle(act) {
+    return {
+      padding:'4px 12px',fontSize:'11px',fontWeight:600,borderRadius:'4px',
+      border:act?'1px solid var(--accent)':'1px solid var(--border-subtle)',
+      background:act?'var(--accent-soft)':'transparent',
+      color:act?'var(--accent)':'var(--text-muted)',cursor:'pointer',
+    };
+  }
+  function presetCardStyle(act) {
+    return {
+      flex:'1',minWidth:'140px',padding:'14px',borderRadius:'8px',
+      border:act?'1px solid var(--success)':'1px solid var(--border-subtle)',
+      background:act?'var(--success-soft)':'var(--bg-card)',
+      cursor:act?'default':'pointer',transition:'all .2s',textAlign:'center',
+    };
+  }
+
   // ═══════════════════════════════════════════════════════════════════════
   // Main Render
   // ═══════════════════════════════════════════════════════════════════════
@@ -608,29 +644,54 @@ function App() {
 
       ${s.showSettings && html`
         <div className="dlg-overlay" onClick=${function(e) { if (e.target.className==='dlg-overlay') closeSettings(); }}>
-          <div className="dlg-box" style=${{maxWidth:'560px'}} onClick=${function(e) { e.stopPropagation(); }}>
-            <h3>API Key 配置</h3>
-            <p style=${{marginBottom:'14px'}}>配置各提供商的 API Key 后即可使用真实 LLM 和搜索引擎。Key 保存在 .env 文件中。</p>
-            ${s.settingsLoading ? html`<div className="skel" style=${{height:'200px'}}></div>` : html`
-              <div style=${{maxHeight:'400px',overflowY:'auto'}}>
-                ${s.apiKeys.map(function(ak) {
-                  var inputId = 'keyInput_' + ak.provider;
-                  return html`<div key=${ak.provider} style=${{display:'flex',alignItems:'center',gap:'8px',padding:'8px 0',borderBottom:'1px solid var(--border-subtle)'}}>
-                    <div style=${{flex:1,minWidth:0}}>
-                      <div style=${{fontSize:'12px',fontWeight:600,color:'var(--text-primary)'}}>${ak.label}</div>
-                      <div style=${{fontSize:'10px',color:'var(--text-muted)',marginTop:'2px'}}>
-                        ${ak.configured ? html`<span style=${{color:'var(--success)'}}>已配置: ${ak.masked}</span>` : html`<span style=${{color:'var(--fail)'}}>未配置</span>`}
+          <div className="dlg-box" style=${{maxWidth:'580px'}} onClick=${function(e) { e.stopPropagation(); }}>
+            <div style=${{display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:'12px'}}>
+              <h3 style=${{margin:0}}>配置</h3>
+              <div style=${{display:'flex',gap:'4px'}}>
+                <button onClick=${function() { dispatch({type:'SET',payload:{settingsTab:'presets'}}); }}
+                        style=${tabStyle(s.settingsTab==='presets')}>预设</button>
+                <button onClick=${function() { dispatch({type:'SET',payload:{settingsTab:'keys'}}); }}
+                        style=${tabStyle(s.settingsTab==='keys')}>API Key</button>
+              </div>
+            </div>
+
+            ${s.settingsTab === 'presets' && html`
+              <p style=${{fontSize:'11px',color:'var(--text-muted)',marginBottom:'12px'}}>一键切换工作模式，自动配置模型、搜索后端、并发数等参数。</p>
+              ${s.settingsLoading ? html`<div className="skel" style=${{height:'120px'}}></div>` : html`
+                <div style=${{display:'flex',gap:'10px',flexWrap:'wrap'}}>
+                  ${s.presets.map(function(p) {
+                    return html`<div key=${p.id} onClick=${function() { if(!p.active) applyPreset(p.id); }}
+                      style=${presetCardStyle(p.active)}>
+                      <div style=${{fontSize:'24px',marginBottom:'4px'}}>${p.icon}</div>
+                      <div style=${{fontSize:'13px',fontWeight:700,color:p.active?'var(--success)':'var(--text-primary)',marginBottom:'2px'}}>${p.name} ${p.active?'✓':''}</div>
+                      <div style=${{fontSize:'10px',color:'var(--text-muted)',lineHeight:'1.4'}}>${p.desc}</div>
+                      ${!p.active && html`<div style=${{marginTop:'8px',fontSize:'10px',color:'var(--accent)',fontWeight:600}}>点击启用 →</div>`}
+                    </div>`;
+                  })}
+                </div>`}
+            `}
+
+            ${s.settingsTab === 'keys' && html`
+              <p style=${{fontSize:'11px',color:'var(--text-muted)',marginBottom:'12px'}}>配置各提供商的 API Key。Key 保存在 .env 文件中。</p>
+              ${s.settingsLoading ? html`<div className="skel" style=${{height:'200px'}}></div>` : html`
+                <div style=${{maxHeight:'300px',overflowY:'auto'}}>
+                  ${s.apiKeys.map(function(ak) {
+                    var inputId = 'keyInput_' + ak.provider;
+                    return html`<div key=${ak.provider} style=${{display:'flex',alignItems:'center',gap:'8px',padding:'7px 0',borderBottom:'1px solid var(--border-subtle)'}}>
+                      <div style=${{flex:1,minWidth:0}}>
+                        <div style=${{fontSize:'12px',fontWeight:600}}>${ak.label}</div>
+                        <div style=${{fontSize:'10px',color:'var(--text-muted)'}}>${ak.configured?'已配置: '+ak.masked:'未配置'}</div>
                       </div>
-                    </div>
-                    <input id=${inputId} type="password" placeholder="输入新Key..."
-                           style=${{width:'160px',padding:'5px 8px',fontSize:'11px',background:'var(--bg-input)',border:'1px solid var(--border-normal)',borderRadius:'4px',color:'var(--text-primary)',outline:'none'}} />
-                    <button onClick=${function() { saveApiKey(ak.provider, inputId); }}
-                            style=${{padding:'4px 10px',fontSize:'10px',borderRadius:'4px',border:'1px solid var(--accent)',background:'var(--accent-soft)',color:'var(--accent)',cursor:'pointer',fontWeight:600,whiteSpace:'nowrap'}}>保存</button>
-                    ${ak.configured && html`<button onClick=${function() { deleteApiKey(ak.provider); }}
-                            style=${{padding:'4px 8px',fontSize:'10px',borderRadius:'4px',border:'1px solid var(--fail)',background:'transparent',color:'var(--fail)',cursor:'pointer'}}>删除</button>`}
-                  </div>`;
-                })}
-              </div>`}
+                      <input id=${inputId} type="password" placeholder="输入新Key..."
+                             style=${{width:'150px',padding:'4px 8px',fontSize:'11px',background:'var(--bg-input)',border:'1px solid var(--border-normal)',borderRadius:'4px',color:'var(--text-primary)',outline:'none'}} />
+                      <button onClick=${function(){saveApiKey(ak.provider,inputId)}}
+                              style=${{padding:'3px 8px',fontSize:'10px',borderRadius:'4px',border:'1px solid var(--accent)',background:'var(--accent-soft)',color:'var(--accent)',cursor:'pointer',fontWeight:600}}>保存</button>
+                      ${ak.configured && html`<button onClick=${function(){deleteApiKey(ak.provider)}}
+                              style=${{padding:'3px 6px',fontSize:'10px',borderRadius:'4px',border:'1px solid var(--fail)',background:'transparent',color:'var(--fail)',cursor:'pointer'}}>✕</button>`}
+                    </div>`;
+                  })}
+                </div>`}
+            `}
             <div className="dlg-acts" style=${{marginTop:'14px'}}>
               <button className="btn-c" onClick=${closeSettings}>关闭</button>
             </div>
