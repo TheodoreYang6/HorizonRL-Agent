@@ -59,9 +59,9 @@ const init = {
   confirm: null,
   showSettings: false,
   apiKeys: [],
-  presets: [],
+  configData: null,
   settingsLoading: false,
-  settingsTab: 'presets',
+  settingsTab: 'llm',
   sessions: [],
   histPage: 0,
   histTotal: 0,
@@ -477,23 +477,24 @@ function App() {
       toast('加载API配置失败', 'err');
     }
   }
-  function openSettings() { dispatch({ type: 'SET', payload: { showSettings: true } }); loadApiKeys(); loadPresets(); }
+  function openSettings() { dispatch({ type: 'SET', payload: { showSettings: true } }); loadApiKeys(); loadConfig(); }
   function closeSettings() { dispatch({ type: 'SET', payload: { showSettings: false } }); }
 
-  async function loadPresets() {
+  async function loadConfig() {
     try {
-      var r = await fetch('/api/settings/presets');
+      var r = await fetch('/api/settings/config');
       var d = await r.json();
-      dispatch({ type: 'SET', payload: { presets: d.presets || [] } });
+      dispatch({ type: 'SET', payload: { configData: d } });
     } catch(e) {}
   }
-  async function applyPreset(pid) {
+  async function saveConfigField(key, value) {
+    var body = {}; body[key] = value;
     try {
-      var r = await fetch('/api/settings/presets/'+pid, {method:'POST'});
+      var r = await fetch('/api/settings/config', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body)});
       var d = await r.json();
-      if (d.ok) { toast('已切换: '+d.name, 'ok'); loadPresets(); }
-      else { toast(d.error||'切换失败', 'err'); }
-    } catch(e) { toast('切换失败', 'err'); }
+      if (d.ok) { toast('已保存', 'ok'); loadConfig(); }
+      else { toast(d.error||'保存失败', 'err'); }
+    } catch(e) { toast('保存失败', 'err'); }
   }
 
   async function saveApiKey(provider, keyElId) {
@@ -601,22 +602,33 @@ function App() {
   }
 
   // ── Settings Helpers ────────────────────────────────────────────
-  function tabStyle(act) {
-    return {
-      padding:'4px 12px',fontSize:'11px',fontWeight:600,borderRadius:'4px',
-      border:act?'1px solid var(--accent)':'1px solid var(--border-subtle)',
-      background:act?'var(--accent-soft)':'transparent',
-      color:act?'var(--accent)':'var(--text-muted)',cursor:'pointer',
-    };
+  var cfg = s.configData;
+  function cfgVal(section, key, def) {
+    if (!cfg || !cfg[section]) return def;
+    return cfg[section][key] || def;
   }
-  function presetCardStyle(act) {
-    return {
-      flex:'1',minWidth:'140px',padding:'14px',borderRadius:'8px',
-      border:act?'1px solid var(--success)':'1px solid var(--border-subtle)',
-      background:act?'var(--success-soft)':'var(--bg-card)',
-      cursor:act?'default':'pointer',transition:'all .2s',textAlign:'center',
-    };
+  function fieldRow(label, key, val, placeholder, type) {
+    type = type || 'text';
+    return html`<div style=${{display:'flex',alignItems:'center',gap:'10px',padding:'6px 0'}}>
+      <span style=${{fontSize:'11px',color:'var(--text-secondary)',width:'130px',flexShrink:0}}>${label}</span>
+      <input type=${type} value=${val||''} placeholder=${placeholder||''}
+             onInput=${function(e){saveConfigField(key,e.target.value)}}
+             style=${fieldInputStyle} />
+    </div>`;
   }
+  function selectRow(label, key, val, options) {
+    return html`<div style=${{display:'flex',alignItems:'center',gap:'10px',padding:'6px 0'}}>
+      <span style=${{fontSize:'11px',color:'var(--text-secondary)',width:'130px',flexShrink:0}}>${label}</span>
+      <select value=${val||''} onChange=${function(e){saveConfigField(key,e.target.value)}}
+              style=${fieldInputStyle}>
+        ${options.map(function(o){return html`<option key=${o.value} value=${o.value}>${o.label}</option>`;})}
+      </select>
+    </div>`;
+  }
+  var fieldInputStyle = {flex:1,padding:'5px 8px',fontSize:'11px',background:'var(--bg-input)',border:'1px solid var(--border-normal)',borderRadius:'4px',color:'var(--text-primary)',outline:'none'};
+  var sectionStyle = {marginBottom:'14px'};
+  var sectionTitleStyle = {fontSize:'11px',fontWeight:700,textTransform:'uppercase',letterSpacing:'.04em',color:'var(--text-muted)',marginBottom:'6px',borderBottom:'1px solid var(--border-subtle)',paddingBottom:'4px'};
+  var tabBtn = {padding:'4px 10px',fontSize:'10px',fontWeight:600,borderRadius:'4px',border:'none',cursor:'pointer'};
 
   // ═══════════════════════════════════════════════════════════════════════
   // Main Render
@@ -644,45 +656,75 @@ function App() {
 
       ${s.showSettings && html`
         <div className="dlg-overlay" onClick=${function(e) { if (e.target.className==='dlg-overlay') closeSettings(); }}>
-          <div className="dlg-box" style=${{maxWidth:'580px'}} onClick=${function(e) { e.stopPropagation(); }}>
+          <div className="dlg-box" style=${{maxWidth:'620px',maxHeight:'80vh',overflowY:'auto'}} onClick=${function(e) { e.stopPropagation(); }}>
             <div style=${{display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:'12px'}}>
-              <h3 style=${{margin:0}}>配置</h3>
-              <div style=${{display:'flex',gap:'4px'}}>
-                <button onClick=${function() { dispatch({type:'SET',payload:{settingsTab:'presets'}}); }}
-                        style=${tabStyle(s.settingsTab==='presets')}>预设</button>
-                <button onClick=${function() { dispatch({type:'SET',payload:{settingsTab:'keys'}}); }}
-                        style=${tabStyle(s.settingsTab==='keys')}>API Key</button>
+              <h3 style=${{margin:0}}>系统配置</h3>
+              <div style=${{display:'flex',gap:'3px'}}>
+                ${['llm','agent','tools','keys'].map(function(t){return html`
+                  <button key=${t} onClick=${function(){dispatch({type:'SET',payload:{settingsTab:t}})}}
+                    style=${Object.assign({},tabBtn,{background:s.settingsTab===t?'var(--accent-soft)':'transparent',color:s.settingsTab===t?'var(--accent)':'var(--text-muted)'})}>
+                    ${{llm:'推理模型',agent:'Agent参数',tools:'工具',keys:'API Key'}[t]}</button>`;})}
               </div>
             </div>
 
-            ${s.settingsTab === 'presets' && html`
-              <p style=${{fontSize:'11px',color:'var(--text-muted)',marginBottom:'12px'}}>一键切换工作模式，自动配置模型、搜索后端、并发数等参数。</p>
-              ${s.settingsLoading ? html`<div className="skel" style=${{height:'120px'}}></div>` : html`
-                <div style=${{display:'flex',gap:'10px',flexWrap:'wrap'}}>
-                  ${s.presets.map(function(p) {
-                    return html`<div key=${p.id} onClick=${function() { if(!p.active) applyPreset(p.id); }}
-                      style=${presetCardStyle(p.active)}>
-                      <div style=${{fontSize:'24px',marginBottom:'4px'}}>${p.icon}</div>
-                      <div style=${{fontSize:'13px',fontWeight:700,color:p.active?'var(--success)':'var(--text-primary)',marginBottom:'2px'}}>${p.name} ${p.active?'✓':''}</div>
-                      <div style=${{fontSize:'10px',color:'var(--text-muted)',lineHeight:'1.4'}}>${p.desc}</div>
-                      ${!p.active && html`<div style=${{marginTop:'8px',fontSize:'10px',color:'var(--accent)',fontWeight:600}}>点击启用 →</div>`}
-                    </div>`;
-                  })}
-                </div>`}
-            `}
+            ${!cfg ? html`<div className="skel" style=${{height:'300px'}}></div>` : html`
 
-            ${s.settingsTab === 'keys' && html`
-              <p style=${{fontSize:'11px',color:'var(--text-muted)',marginBottom:'12px'}}>配置各提供商的 API Key。Key 保存在 .env 文件中。</p>
-              ${s.settingsLoading ? html`<div className="skel" style=${{height:'200px'}}></div>` : html`
-                <div style=${{maxHeight:'300px',overflowY:'auto'}}>
+              ${s.settingsTab === 'llm' && html`
+                <div style=${sectionStyle}>
+                  <div style=${sectionTitleStyle}>主推理模型</div>
+                  ${selectRow('提供商','llm__provider',cfgVal('llm','provider'), (cfg.models_available||{}).deepseek||[])}
+                  ${selectRow('模型','llm__model',cfgVal('llm','model'), (cfg.models_available||{})[cfgVal('llm','provider','deepseek')]||[])}
+                  ${fieldRow('Base URL','llm__base_url',cfgVal('llm','base_url'),'https://api.deepseek.com')}
+                  ${fieldRow('Temperature','llm__temperature',cfgVal('llm','temperature'),'0.3','number')}
+                  ${fieldRow('Max Tokens','llm__max_tokens',cfgVal('llm','max_tokens'),'4096','number')}
+                </div>
+                <div style=${sectionStyle}>
+                  <div style=${sectionTitleStyle}>轻量模型 (L2 摘要压缩)</div>
+                  ${selectRow('模型','lightweight_llm__model',cfgVal('lightweight_llm','model'), (cfg.models_available||{}).deepseek||[])}
+                  ${fieldRow('Base URL','lightweight_llm__base_url',cfgVal('lightweight_llm','base_url'),'https://api.deepseek.com')}
+                </div>
+                <div style=${sectionStyle}>
+                  <div style=${sectionTitleStyle}>Embedding 模型 (L3 向量检索)</div>
+                  ${selectRow('提供商','embedding__provider',cfgVal('embedding','provider'), [{value:'dashscope',label:'DashScope'},{value:'openai',label:'OpenAI'}])}
+                  ${selectRow('模型','embedding__model',cfgVal('embedding','model'), (cfg.embedding_models_available||[]))}
+                  ${fieldRow('Base URL','embedding__base_url',cfgVal('embedding','base_url'),'https://dashscope.aliyuncs.com/compatible-mode/v1')}
+                </div>
+              `}
+
+              ${s.settingsTab === 'agent' && html`
+                <div style=${sectionStyle}>
+                  <div style=${sectionTitleStyle}>执行参数</div>
+                  ${fieldRow('最大步数','agent__max_steps',cfgVal('agent','max_steps'),'30','number')}
+                  ${fieldRow('Worker 并发数','agent__worker_semaphore_limit',cfgVal('agent','worker_semaphore_limit'),'3','number')}
+                  ${fieldRow('任务超时(秒)','agent__task_timeout',cfgVal('agent','task_timeout'),'120','number')}
+                  ${fieldRow('LLM 调用超时(秒)','agent__llm_call_timeout',cfgVal('agent','llm_call_timeout'),'30','number')}
+                  ${fieldRow('工具调用超时(秒)','agent__tool_call_timeout',cfgVal('agent','tool_call_timeout'),'12','number')}
+                  ${fieldRow('每任务最多重试','agent__max_retries_per_task',cfgVal('agent','max_retries_per_task'),'3','number')}
+                </div>
+              `}
+
+              ${s.settingsTab === 'tools' && html`
+                <div style=${sectionStyle}>
+                  <div style=${sectionTitleStyle}>Web 搜索</div>
+                  ${selectRow('搜索引擎','tools__web_search_engine',cfgVal('tools','web_search_engine'), (cfg.search_engines_available||[]))}
+                </div>
+                <div style=${sectionStyle}>
+                  <div style=${sectionTitleStyle}>记忆</div>
+                  ${selectRow('L3 后端','memory__l3_backend',cfgVal('memory','l3_backend'), [{value:'chromadb',label:'ChromaDB (自动持久化)'},{value:'faiss',label:'FAISS (零依赖)'}])}
+                </div>
+              `}
+
+              ${s.settingsTab === 'keys' && html`
+                <p style=${{fontSize:'11px',color:'var(--text-muted)',marginBottom:'8px'}}>API Key 保存在 .env 文件中，输入后点击保存。</p>
+                <div style=${{maxHeight:'320px',overflowY:'auto'}}>
                   ${s.apiKeys.map(function(ak) {
                     var inputId = 'keyInput_' + ak.provider;
-                    return html`<div key=${ak.provider} style=${{display:'flex',alignItems:'center',gap:'8px',padding:'7px 0',borderBottom:'1px solid var(--border-subtle)'}}>
+                    return html`<div key=${ak.provider} style=${{display:'flex',alignItems:'center',gap:'8px',padding:'6px 0',borderBottom:'1px solid var(--border-subtle)'}}>
                       <div style=${{flex:1,minWidth:0}}>
                         <div style=${{fontSize:'12px',fontWeight:600}}>${ak.label}</div>
                         <div style=${{fontSize:'10px',color:'var(--text-muted)'}}>${ak.configured?'已配置: '+ak.masked:'未配置'}</div>
                       </div>
-                      <input id=${inputId} type="password" placeholder="输入新Key..."
+                      <input id=${inputId} type="password" placeholder="输入Key..."
                              style=${{width:'150px',padding:'4px 8px',fontSize:'11px',background:'var(--bg-input)',border:'1px solid var(--border-normal)',borderRadius:'4px',color:'var(--text-primary)',outline:'none'}} />
                       <button onClick=${function(){saveApiKey(ak.provider,inputId)}}
                               style=${{padding:'3px 8px',fontSize:'10px',borderRadius:'4px',border:'1px solid var(--accent)',background:'var(--accent-soft)',color:'var(--accent)',cursor:'pointer',fontWeight:600}}>保存</button>
@@ -693,6 +735,7 @@ function App() {
                 </div>`}
             `}
             <div className="dlg-acts" style=${{marginTop:'14px'}}>
+              <span style=${{fontSize:'10px',color:'var(--text-muted)',marginRight:'auto'}}>修改即保存</span>
               <button className="btn-c" onClick=${closeSettings}>关闭</button>
             </div>
           </div>
