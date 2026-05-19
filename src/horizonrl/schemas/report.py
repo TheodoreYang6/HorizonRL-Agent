@@ -44,7 +44,7 @@ class ReportMetadata:
 
     session_id: str = ""
     generated_at: float = field(default_factory=_time.time)
-    author: str = "HorizonRL-Agent"
+    author: str = "Horizon-Agent"
     mode: str = "user"
     used_mock_data: bool = False
     mock_ratio: float = 0.0

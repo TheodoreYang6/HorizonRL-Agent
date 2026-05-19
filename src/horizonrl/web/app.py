@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -14,27 +15,41 @@ from horizonrl.web.routes.chat import router as chat_router
 from horizonrl.web.routes.stream import router as stream_router
 from horizonrl.web.routes.report import router as report_router
 from horizonrl.web.routes.sessions import router as sessions_router
-import os
 from horizonrl.web.session_manager import create_session_manager
 
-# 通过环境变量切换后端: SESSION_BACKEND=sqlite (默认 memory)
-_session_backend = os.environ.get("SESSION_BACKEND", "memory")
-session_manager = create_session_manager(backend=_session_backend)
+# 模块级单例（懒创建，避免 import 时产生 DB 文件）
+_session_manager = None
+
+
+def _get_default_session_manager():
+    """懒创建默认 session_manager（SQLite 持久化，路径可通过环境变量配置）。"""
+    global _session_manager
+    if _session_manager is None:
+        backend = os.environ.get("SESSION_BACKEND", "sqlite")
+        db_path = os.environ.get("SESSION_DB_PATH", "data/sessions.db")
+        _session_manager = create_session_manager(backend=backend, db_path=db_path)
+    return _session_manager
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """应用生命周期管理。"""
-    app.state.session_manager = session_manager
+    if not hasattr(app.state, "session_manager") or app.state.session_manager is None:
+        app.state.session_manager = _get_default_session_manager()
     yield
-    session_manager.cleanup_expired()
+    app.state.session_manager.cleanup_expired()
 
 
-def create_app() -> FastAPI:
-    """创建并返回已配置的 FastAPI 应用实例。"""
+def create_app(session_mgr=None) -> FastAPI:
+    """创建并返回已配置的 FastAPI 应用实例。
+
+    Args:
+        session_mgr: 可选的自定义 SessionManager，用于测试注入。
+                     默认使用 SQLite 持久化单例（data/sessions.db）。
+    """
     app = FastAPI(
-        title="HorizonRL-Agent",
-        description="Long-Horizon Agentic RL System — Web Interface",
+        title="Horizon-Agent",
+        description="Horizon-Agent — Multi-Agent Verified Research",
         version="0.1.0",
         lifespan=lifespan,
     )
@@ -46,6 +61,11 @@ def create_app() -> FastAPI:
         allow_credentials=True,
         allow_methods=["*"],
         allow_headers=["*"],
+    )
+
+    # 会话管理器：优先使用注入，否则懒创建默认单例
+    app.state.session_manager = (
+        session_mgr if session_mgr is not None else _get_default_session_manager()
     )
 
     # 静态文件挂载
@@ -70,7 +90,7 @@ def create_app() -> FastAPI:
         return templates.TemplateResponse(
             request=request,
             name="index.html",
-            context={"app_version": "0.1.0"},
+            context={"app_version": "0.2.0"},
         )
 
     return app

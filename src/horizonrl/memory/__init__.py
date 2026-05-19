@@ -8,6 +8,7 @@ from horizonrl.memory.hierarchical_memory import (
     MemoryContext,
     MemoryEntry,
 )
+from horizonrl.memory.vector_store import ChromaVectorStore, create_vector_store
 
 __all__ = [
     "MemoryEntry",
@@ -16,4 +17,6 @@ __all__ = [
     "L2SemanticSummary",
     "L3EpisodicArchive",
     "HierarchicalMemory",
+    "ChromaVectorStore",
+    "create_vector_store",
 ]

@@ -6,11 +6,14 @@ import pytest
 from fastapi.testclient import TestClient
 
 from horizonrl.web.app import create_app
+from horizonrl.web.session_manager import SessionManager
 
 
 @pytest.fixture
 def client():
-    app = create_app()
+    """使用内存 SessionManager 隔离测试，避免污染 SQLite DB。"""
+    sm = SessionManager()
+    app = create_app(session_mgr=sm)
     with TestClient(app) as c:
         yield c
 
@@ -23,7 +26,7 @@ class TestIndex:
 
     def test_index_contains_app_name(self, client):
         resp = client.get("/")
-        assert "HorizonRL-Agent" in resp.text
+        assert "Horizon-Agent" in resp.text
 
 
 class TestChatEndpoint:
@@ -101,6 +104,59 @@ class TestStaticFiles:
                "text/" in resp.headers["content-type"].lower()
 
 
+class TestSessionsAPI:
+    """GET/DELETE /api/sessions 端点测试。"""
+
+    def test_list_empty(self, client):
+        resp = client.get("/api/sessions")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["sessions"] == []
+        assert data["total"] == 0
+
+    def test_list_with_sessions(self, client):
+        # 创建几个会话
+        client.post("/api/chat", json={"message": "问题1", "mode": "deep"})
+        client.post("/api/chat", json={"message": "问题2", "mode": "deep"})
+        resp = client.get("/api/sessions")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["total"] == 2
+        assert len(data["sessions"]) == 2
+
+    def test_list_respects_limit(self, client):
+        for i in range(5):
+            client.post("/api/chat", json={"message": f"问题{i}", "mode": "deep"})
+        resp = client.get("/api/sessions?limit=2&offset=0")
+        data = resp.json()
+        assert len(data["sessions"]) == 2
+        assert data["total"] == 5
+
+    def test_get_session_detail(self, client):
+        r = client.post("/api/chat", json={"message": "研究AI", "mode": "deep"})
+        sid = r.json()["session_id"]
+        resp = client.get(f"/api/sessions/{sid}")
+        assert resp.status_code == 200
+        assert resp.json()["query"] == "研究AI"
+
+    def test_get_session_404(self, client):
+        resp = client.get("/api/sessions/nonexistent")
+        assert resp.status_code == 404
+
+    def test_delete_session(self, client):
+        r = client.post("/api/chat", json={"message": "研究AI", "mode": "deep"})
+        sid = r.json()["session_id"]
+        resp = client.delete(f"/api/sessions/{sid}")
+        assert resp.status_code == 200
+        assert resp.json()["deleted"] == sid
+        # 确认已删除
+        assert client.get(f"/api/sessions/{sid}").status_code == 404
+
+    def test_delete_nonexistent(self, client):
+        resp = client.delete("/api/sessions/nonexistent")
+        assert resp.status_code == 404
+
+
 class TestAPIDocs:
     def test_swagger_ui_accessible(self, client):
         resp = client.get("/docs")
@@ -110,5 +166,5 @@ class TestAPIDocs:
         resp = client.get("/openapi.json")
         assert resp.status_code == 200
         schema = resp.json()
-        assert schema["info"]["title"] == "HorizonRL-Agent"
+        assert schema["info"]["title"] == "Horizon-Agent"
         assert "/api/chat" in schema["paths"]

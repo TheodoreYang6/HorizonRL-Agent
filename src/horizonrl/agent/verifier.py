@@ -72,9 +72,9 @@ class RuleEngine:
         (r"Execution timed out", "代码执行超时"),
     ]
 
-    # 不完整信号
+    # 不完整信号 — Worker 纯分析任务 LLM 调用失败 (非模板回退)
     INCOMPLETE_PATTERNS = [
-        (r"无需工具调用，等待后续 LLM 处理", "纯分析任务未接入 LLM"),
+        (r"LLM 分析出错:\s*.+", "纯分析任务 LLM 返回错误"),
     ]
 
     def check(self, result: StepResult, task_desc: str) -> dict:

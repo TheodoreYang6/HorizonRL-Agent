@@ -70,7 +70,7 @@ class TestWriterConfig:
     def test_defaults(self):
         cfg = WriterConfig()
         assert cfg.enable_llm_writer is True
-        assert cfg.default_author == "HorizonRL-Agent"
+        assert cfg.default_author == "Horizon-Agent"
         assert cfg.export_dir == "reports"
         assert cfg.max_evidence_items == 10
         assert cfg.include_debug_stats is False

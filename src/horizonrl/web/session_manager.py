@@ -147,12 +147,16 @@ class SqliteSessionManager:
 
     会话重启不丢失，支持分页列表查询。
     WAL 模式确保并发安全。
+
+    内建 LRU 缓存：get() 返回同一对象引用，
+    使 session.events.append() 等原地修改能正确同步到 DB。
     """
 
     def __init__(self, db_path: str = "data/sessions.db", ttl_seconds: int = 86400):
         self._db_path = Path(db_path)
         self._db_path.parent.mkdir(parents=True, exist_ok=True)
         self._ttl = ttl_seconds
+        self._cache: dict[str, SessionState] = {}
         self._init_db()
 
     def _get_conn(self) -> sqlite3.Connection:
@@ -193,6 +197,9 @@ class SqliteSessionManager:
     # ── CRUD ────────────────────────────────────────────────────────────
 
     def get(self, sid: str) -> SessionState | None:
+        """从缓存或 DB 获取会话，保证同 sid 返回同一对象引用。"""
+        if sid in self._cache:
+            return self._cache[sid]
         with self._get_conn() as conn:
             row = conn.execute(
                 "SELECT * FROM sessions WHERE session_id = ?", (sid,)
@@ -201,11 +208,14 @@ class SqliteSessionManager:
                 return None
             d = dict(row)
             d["events"] = d.pop("events_json", "[]")
-            return SessionState.from_dict(d)
+            state = SessionState.from_dict(d)
+            self._cache[sid] = state
+            return state
 
     def create(self, sid: str, query: str) -> SessionState:
         now = time.time()
         state = SessionState(session_id=sid, query=query, created_at=now)
+        self._cache[sid] = state
         with self._get_conn() as conn:
             conn.execute(
                 """INSERT INTO sessions (session_id, query, status, phase, label,
@@ -220,16 +230,15 @@ class SqliteSessionManager:
         return state
 
     def update(self, sid: str, **kwargs) -> SessionState | None:
+        """更新会话字段并同步到 DB，保留缓存对象引用。"""
         state = self.get(sid)
         if state is None:
             return None
 
-        # 更新内存中的状态
         for k, v in kwargs.items():
             if hasattr(state, k):
                 setattr(state, k, v)
 
-        # 同步到 SQLite
         now = time.time()
         events_json = json.dumps(state.events, ensure_ascii=False)
         with self._get_conn() as conn:
@@ -245,7 +254,28 @@ class SqliteSessionManager:
             )
         return state
 
+    def flush(self, sid: str) -> bool:
+        """强制将缓存中的会话事件同步到 DB（用于高频事件场景）。"""
+        state = self._cache.get(sid)
+        if state is None:
+            return False
+        now = time.time()
+        events_json = json.dumps(state.events, ensure_ascii=False)
+        with self._get_conn() as conn:
+            conn.execute(
+                """UPDATE sessions SET status=?, phase=?, label=?,
+                   events_json=?, final_answer=?, final_answer_path=?,
+                   debug_report_path=?, runtime_ms=?, error=?, updated_at=?
+                   WHERE session_id=?""",
+                (state.status, state.phase, state.label, events_json,
+                 state.final_answer, state.final_answer_path,
+                 state.debug_report_path, state.runtime_ms, state.error,
+                 now, sid),
+            )
+        return True
+
     def delete(self, sid: str) -> bool:
+        self._cache.pop(sid, None)
         with self._get_conn() as conn:
             cursor = conn.execute(
                 "DELETE FROM sessions WHERE session_id = ?", (sid,)
@@ -259,7 +289,13 @@ class SqliteSessionManager:
                 "DELETE FROM sessions WHERE created_at < ? AND status != 'running'",
                 (cutoff,),
             )
-            return cursor.rowcount
+            deleted = cursor.rowcount
+        # 清理过期缓存
+        for sid in list(self._cache):
+            s = self._cache[sid]
+            if s.created_at < cutoff and s.status != "running":
+                self._cache.pop(sid, None)
+        return deleted
 
     # ── List ─────────────────────────────────────────────────────────────
 
@@ -272,8 +308,13 @@ class SqliteSessionManager:
             results = []
             for row in rows:
                 d = dict(row)
-                d["events"] = d.pop("events_json", "[]")
-                results.append(SessionState.from_dict(d))
+                sid = d["session_id"]
+                # 优先返回缓存中的活跃对象（events 可能已更新）
+                if sid in self._cache:
+                    results.append(self._cache[sid])
+                else:
+                    d["events"] = d.pop("events_json", "[]")
+                    results.append(SessionState.from_dict(d))
             return results
 
     def count(self) -> int:

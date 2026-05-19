@@ -1,6 +1,6 @@
 """
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-HorizonRL-Agent 配置管理系统
+Horizon-Agent 配置管理系统
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 本文件是项目中唯一被所有模块依赖的配置层。使用 Pydantic V2 + YAML + .env
@@ -158,13 +158,17 @@ class MemoryConfig(BaseModel):
     )
 
     # ── L3: 经验归档 ──
+    l3_backend: str = Field(
+        default="faiss",
+        description="L3 向量存储后端: faiss (默认, 零依赖) | chromadb (推荐生产使用, 支持元数据过滤)",
+    )
     l3_embedding_model: str = Field(
         default="text-embedding-3-small",
         description="L3 向量嵌入使用的模型",
     )
     l3_index_path: str = Field(
         default=".memory/episodic_index",
-        description="FAISS 索引持久化路径",
+        description="FAISS/ChromaDB 索引持久化路径",
     )
     retrieval_top_k: int = Field(
         default=5,
@@ -278,6 +282,14 @@ class ArxivSearchConfig(BaseModel):
     timeout: int = Field(default=12, gt=0)
 
 
+class PaperSearchConfig(BaseModel):
+    """学术论文搜索工具配置。"""
+
+    max_results: int = Field(default=20, ge=1, description="最大返回论文数")
+    timeout: int = Field(default=15, gt=0, description="单次搜索超时(秒)")
+    rate_limit_per_minute: int = Field(default=10, ge=1, description="每分钟最大请求数")
+
+
 class CodeExecutionConfig(BaseModel):
     """代码执行工具配置。"""
 
@@ -286,11 +298,19 @@ class CodeExecutionConfig(BaseModel):
     max_output_chars: int = Field(default=10000, gt=0)
 
 
+class VerifierConfig(BaseModel):
+    """验证器配置。"""
+
+    strict_mode: bool = Field(default=False, description="严格模式, 提高证据数量和质量要求")
+    min_evidence_count: int = Field(default=1, ge=0, description="最少证据数量, 低于此值判定为证据不足")
+
+
 class ToolsConfig(BaseModel):
     """工具总配置。"""
 
     web_search: WebSearchConfig = Field(default_factory=WebSearchConfig)
     arxiv_search: ArxivSearchConfig = Field(default_factory=ArxivSearchConfig)
+    paper_search: PaperSearchConfig = Field(default_factory=PaperSearchConfig)
     code_execution: CodeExecutionConfig = Field(default_factory=CodeExecutionConfig)
 
 
@@ -336,7 +356,7 @@ class TrainingConfig(BaseModel):
 
 
 class RootConfig(BaseModel):
-    """HorizonRL-Agent 顶层配置。
+    """Horizon-Agent 顶层配置。
 
     聚合所有子配置。通过 getattr 访问：
         cfg.llm.provider
@@ -371,6 +391,7 @@ class RootConfig(BaseModel):
     ))
     memory: MemoryConfig = Field(default_factory=MemoryConfig)
     agent: AgentRuntimeConfig = Field(default_factory=AgentRuntimeConfig)
+    verifier: VerifierConfig = Field(default_factory=VerifierConfig)
     logging: LoggingConfig = Field(default_factory=LoggingConfig)
     tools: ToolsConfig = Field(default_factory=ToolsConfig)
     training: TrainingConfig = Field(default_factory=TrainingConfig)

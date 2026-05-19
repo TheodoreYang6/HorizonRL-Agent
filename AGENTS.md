@@ -2,12 +2,12 @@
 
 This file provides guidance to Codex when working in this repository.
 
-## Project: HorizonRL-Agent
+## Project: Horizon-Agent · 溯证智搜
 
-面向开发者和知识工作者的 AI 深度研究助手。输入一个研究问题，自动搜索网络和学术论
-文、交叉验证、撰写结构化报告。支持 CLI / Web / API 三种使用方式，可私有化部署。
+多 Agent 协同研究系统。输入一个问题，多个 Agent 并发搜索网络和学术论文、
+交叉验证、撰写带证据溯源的结构化报告。支持 CLI / Web / API 三种使用方式，可私有化部署。
 
-三项核心功能: **Hierarchical Memory** (L1→L2→L3 with real Embedding API)、
+三项核心技术: **Hierarchical Memory** (L1→L2→L3 with real Embedding API)、
 **Verifier-guided Replanning** (9 rules → 9 strategies)、**Async Multi-Agent DAG Orchestration**。
 
 目标: 打造国内可用的、生产级 AI 深度研究工具。

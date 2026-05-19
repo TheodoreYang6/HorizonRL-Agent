@@ -304,26 +304,53 @@ class MemoryContext:
 
 
 class L3EpisodicArchive:
-    """L3 经验归档 — FAISS 向量索引 + embedding API。
+    """L3 经验归档 — ChromaDB (推荐) 或 FAISS 向量索引 + embedding API。
 
-    支持两种模式:
-        - vector: FAISS 索引 + n-gram 特征哈希 (零依赖，语义近似)
-        - keyword: 关键词匹配 fallback
+    双后端:
+        - chromadb: 自动持久化，元数据过滤，增量写入 (默认)
+        - faiss: FAISS 索引 + n-gram 特征哈希 (零额外依赖)
 
-    持久化: save() / load() 到磁盘，跨会话复用。
+    未安装 chromadb 时自动回退 FAISS。
     """
 
     # L2 归一化向量距离范围 [0, sqrt(2)]，阈值 1.35 平衡召回/精度
     SIM_THRESHOLD: float = 1.35
 
     def __init__(self, index_path: str = ".memory/episodic_index",
-                 embedding_dim: int = 1024):
+                 embedding_dim: int = 1024,
+                 backend: str = "faiss"):
         self.index_path = index_path
         self.embedding_dim = embedding_dim
-        self._entries: list[dict] = []         # {text, metadata, ts}
+        self._backend = backend
+        self._entries: list[dict] = []         # {text, metadata, ts} (FAISS 用)
         self._index = None                      # FAISS index (lazy build)
         self._llm_client: LLMClient | None = None
-        self._dirty = False                     # 是否有未持久化的更改
+        self._dirty = False
+        self._chroma = None                     # ChromaVectorStore 实例
+
+    def _init_chromadb(self) -> bool:
+        """初始化 ChromaDB 后端。成功返回 True，失败返回 False。"""
+        if self._chroma is not None:
+            return True
+        if self._backend != "chromadb":
+            return False
+        try:
+            from horizonrl.memory.vector_store import ChromaVectorStore
+            # 使用 index_path 作为 ChromaDB 持久化目录
+            persist_dir = self.index_path
+            # 兼容旧默认值: .memory/episodic_index → data/chromadb
+            if persist_dir == ".memory/episodic_index":
+                persist_dir = "data/chromadb"
+            self._chroma = ChromaVectorStore(persist_dir=persist_dir)
+            return True
+        except (ImportError, Exception):
+            self._backend = "faiss"
+            return False
+
+    @property
+    def _use_chroma(self) -> bool:
+        """当前是否使用 ChromaDB 后端。"""
+        return self._chroma is not None and self._backend == "chromadb"
 
     # ── 嵌入 ──────────────────────────────────────────────────────────
 
@@ -395,61 +422,90 @@ class L3EpisodicArchive:
 
     async def archive(self, text: str, metadata: dict | None = None) -> None:
         """归档一条经验到 L3。优先用 embedding API，不可用时回退 n-gram。"""
+        if self._init_chromadb():
+            await self._archive_chroma(text, metadata or {})
+            return
         import numpy as np
         vec = await self._embed(text)
         vec_np = np.array([vec], dtype=np.float32)
-
         if self._index is None:
             self._build_index(vec_np)
         else:
             self._index.add(vec_np)
-
         self._entries.append({
-            "text": text,
-            "vector": vec,
-            "metadata": metadata or {},
-            "ts": time.time(),
+            "text": text, "vector": vec,
+            "metadata": metadata or {}, "ts": time.time(),
         })
         self._dirty = True
 
     def archive_sync(self, text: str, metadata: dict | None = None) -> None:
         """同步归档（n-gram 嵌入，无需 API）。用于不支持异步的场景。"""
+        if self._init_chromadb():
+            self._archive_chroma_sync(text, metadata or {})
+            return
         import numpy as np
         vec = self._ngram_embed(text)
         vec_np = np.array([vec], dtype=np.float32)
-
         if self._index is None:
             self._build_index(vec_np)
         else:
             self._index.add(vec_np)
-
         self._entries.append({
-            "text": text,
-            "vector": vec,
-            "metadata": metadata or {},
-            "ts": time.time(),
+            "text": text, "vector": vec,
+            "metadata": metadata or {}, "ts": time.time(),
         })
         self._dirty = True
+
+    async def _archive_chroma(self, text: str, metadata: dict) -> None:
+        """ChromaDB 异步归档：用 embedding API 生成向量后写入。"""
+        import hashlib
+        vec = await self._embed(text)
+        key = hashlib.md5(text.encode()).hexdigest()[:16]
+        self._chroma.add(
+            embeddings=[vec],
+            keys=[key],
+            metadata=[{"text": text[:500], **metadata}],
+        )
+
+    def _archive_chroma_sync(self, text: str, metadata: dict) -> None:
+        """ChromaDB 同步归档：用 n-gram 嵌入写入。"""
+        import hashlib
+        vec = self._ngram_embed(text)
+        key = hashlib.md5(text.encode()).hexdigest()[:16]
+        self._chroma.add(
+            embeddings=[vec],
+            keys=[key],
+            metadata=[{"text": text[:500], **metadata}],
+        )
 
     # ── 检索 ────────────────────────────────────────────────────────────
 
     def search(self, query: str, top_k: int = 5) -> list[str]:
-        """跨 L3 混合检索：向量召回 → 关键词后过滤。
+        """跨 L3 检索：ChromaDB 向量检索 或 FAISS 混合检索。
 
-        1. FAISS n-gram 向量检索召回 top_k 候选（高召回）
-        2. 关键词重叠过滤无关结果（保证精度）
-        3. FAISS 不可用时回退纯关键词匹配
+        ChromaDB: 纯向量相似度检索
+        FAISS: n-gram 向量召回 → 关键词后过滤 → 纯关键词回退
         """
+        if self._init_chromadb() and self._use_chroma:
+            return self._chroma_search(query, top_k)
         if self._index is not None and len(self._entries) > 0:
             return self._hybrid_search(query, top_k)
         return self._keyword_search(query, top_k)
+
+    def _chroma_search(self, query: str, k: int) -> list[str]:
+        """ChromaDB 向量检索。"""
+        q_vec = self._embed_sync(query)
+        results = self._chroma.search(q_vec, top_k=k)
+        return [
+            f"[L3] {r.get('metadata', {}).get('text', r.get('key', ''))[:200]}"
+            for r in results
+        ]
 
     def _hybrid_search(self, query: str, k: int) -> list[str]:
         """混合检索：向量召回 + 关键词后过滤。"""
         candidates = self._vector_search(query, max(k * 2, 10))
         if not candidates:
             return self._keyword_search(query, k)
-        # 关键词后过滤：至少一个查询词出现在候选文本中
         terms = query.lower().split()
         filtered = []
         prefix_len = len("[L3] ")
@@ -490,7 +546,7 @@ class L3EpisodicArchive:
                     break
         return results
 
-    # ── FAISS 索引管理 ─────────────────────────────────────────────────
+    # ── 持久化 ───────────────────────────────────────────────────────────
 
     def _build_index(self, initial_vectors=None) -> None:
         """构建 FAISS 索引 (lazy)。"""
@@ -504,15 +560,16 @@ class L3EpisodicArchive:
             self._index = None  # FAISS 不可用，回退关键词
 
     def save(self) -> None:
-        """持久化 FAISS 索引和条目到磁盘。"""
+        """持久化到磁盘 (ChromaDB 自动处理, FAISS 手动写入)。"""
+        if self._use_chroma:
+            self._chroma.save()
+            return
         if self._index is None or not self._dirty:
             return
         try:
             import faiss, json, os
             os.makedirs(os.path.dirname(self.index_path), exist_ok=True)
-            # 保存 FAISS 索引
             faiss.write_index(self._index, f"{self.index_path}.faiss")
-            # 保存条目元数据
             meta = [
                 {"text": e["text"], "metadata": e.get("metadata", {}), "ts": e.get("ts", 0)}
                 for e in self._entries
@@ -521,10 +578,12 @@ class L3EpisodicArchive:
                 json.dump(meta, f, ensure_ascii=False)
             self._dirty = False
         except Exception:
-            pass  # 持久化失败不影响主流程
+            pass
 
     def load(self) -> bool:
-        """从磁盘加载 FAISS 索引和条目。返回是否成功。"""
+        """从磁盘加载 (ChromaDB 自动处理, FAISS 手动读取)。"""
+        if self._init_chromadb():
+            return self._chroma.load()
         import numpy as np
         try:
             import faiss, json, os
@@ -544,15 +603,21 @@ class L3EpisodicArchive:
         except Exception:
             return False
 
-    # ── 属性 ────────────────────────────────────────────────────────────
+    # ── 生命周期 ──────────────────────────────────────────────────────────
 
     def clear(self) -> None:
+        """清空所有 L3 记忆。"""
+        if self._use_chroma:
+            self._chroma.clear()
         self._entries.clear()
         self._index = None
         self._dirty = False
 
     @property
     def count(self) -> int:
+        """L3 条目总数。"""
+        if self._init_chromadb() and self._use_chroma:
+            return self._chroma.count()
         return len(self._entries)
 
 
@@ -582,9 +647,12 @@ class HierarchicalMemory:
             max_entries=self.config.l2_max_entries,
         )
 
-        # L3 经验归档
+        # L3 经验归档 (默认 FAISS, 可配置切换 ChromaDB)
+        l3_backend = getattr(self.config, 'l3_backend', 'faiss')
+        l3_path = getattr(self.config, 'l3_index_path', '.memory/episodic_index')
         self._l3 = L3EpisodicArchive(
-            index_path=self.config.l3_index_path if hasattr(self.config, 'l3_index_path') else ".memory/episodic_index"
+            index_path=l3_path,
+            backend=l3_backend,
         )
         self._replan_count: int = 0
 

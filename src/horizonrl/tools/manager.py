@@ -211,7 +211,7 @@ class ToolManager:
         self._default_max_retries = 2
         # 存储各工具类型的超时，供 call() 按工具名查询
         self._tool_timeouts: dict[str, float] = {}
-        for tool_type in ("web_search", "arxiv_search", "code_execution", "retrieval"):
+        for tool_type in ("web_search", "arxiv_search", "paper_search", "code_execution", "retrieval"):
             tool_cfg = getattr(tools_config, tool_type, None)
             if tool_cfg is not None:
                 self._tool_timeouts[tool_type] = float(

@@ -2,7 +2,7 @@
 Trajectory Logger — 异步轨迹日志系统。
 
 将 Agent 执行全生命周期的结构化的 TrajectoryEvent 异步写入 JSONL 文件。
-轨迹日志是 HorizonRL-Agent 的"一等基础设施"——它是后续消融实验、
+轨迹日志是 Horizon-Agent 的"一等基础设施"——它是后续消融实验、
 成功率分析和 RL 训练的数据源。
 
 特性：

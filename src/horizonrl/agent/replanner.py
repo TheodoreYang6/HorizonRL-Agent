@@ -2,7 +2,7 @@
 Replanner — 局部重规划。
 
 当 Verifier 判定某个子任务失败后，Replanner 生成 PlanPatch 对 PlanGraph 做局部修复，
-而不是全局重建。这是 HorizonRL-Agent 的核心创新之一。
+而不是全局重建。这是 Horizon-Agent 的核心创新之一。
 
 策略映射（ErrorType → PatchType）：
     EMPTY_RESULT  → RETRY（改写查询词，扩大搜索范围）

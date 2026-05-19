@@ -2,12 +2,12 @@
 
 This file provides guidance to Claude Code when working in this repository.
 
-## Project: HorizonRL-Agent — AI 深度研究助手
+## Project: Horizon-Agent · 溯证智搜
 
-面向开发者和知识工作者的 AI 深度研究助手。输入一个研究问题，自动搜索网络和学术论
-文、交叉验证、撰写结构化报告。支持 CLI / Web / API 三种使用方式，可私有化部署。
+多 Agent 协同研究系统。输入一个问题，多个 Agent 并发搜索网络和学术论文、
+交叉验证、撰写带证据溯源的结构化报告。支持 CLI / Web / API 三种使用方式，可私有化部署。
 
-三项核心功能: **Hierarchical Memory** (L1→L2→L3 with real Embedding API)、
+三项核心技术: **Hierarchical Memory** (L1→L2→L3 with real Embedding API)、
 **Verifier-guided Replanning** (9 rules → 9 strategies)、**Async Multi-Agent DAG Orchestration**。
 
 目标: 打造国内可用的、生产级 AI 深度研究工具。
@@ -24,34 +24,33 @@ This file provides guidance to Claude Code when working in this repository.
 | 个人偏好 | `CLAUDE.local.md`（git-ignored） |
 | API 配置 | `.env.example` → 复制为 `.env` |
 
-## Development Status (2026-05-18 Day 8 工程化转型)
+## Development Status (2026-05-19 Day 9 Web 产品化完成)
 
 ```
-Phase 1+2: 全部完成 (18 Steps + Day 6-7 架构收敛 + 产品化)
+Phase 1+2: 全部完成 + Day 6-9 产品化增强
 
 Day 6 核心交付:
   ✅ 共享 Service 层 — CLI/Web/Benchmark 统一走 ResearchOrchestrator
   ✅ Benchmark 全链路重构 — JSONL 任务 + 结构化 Evaluator (20/20 100%)
-  ✅ Web SSE 实时推送 + Token 流式 + 工具面板 + 报告预览
-  ✅ Trajectory Logger 深度集成 — 25 事件/次 (plan/worker/tool/verify/session)
-  ✅ L3 Embedding 接入 — DashScope text-embedding-v4, 自动回退 n-gram
-  ✅ Planner 5 种任务类型 + 时间感知 + 搜索词清洗
-  ✅ Paper Search 替代 Arxiv (OpenAlex + Semantic Scholar, 国内可用)
-  ✅ 17+ Bug 修复 — 贯穿全栈
+  ✅ L3 Embedding 接入 — DashScope text-embedding-v4
+  ✅ Planner 5 种任务类型 + Paper Search 国内可用
 
 Day 7 核心交付:
   ✅ FastAPI 架构迁移 — aiohttp → FastAPI + uvicorn
-  ✅ UI 全面美化 — 深邃星空设计系统 + 三栏布局 + 模块化 JS
-  ✅ SSE 防重入 — 已完成会话回放、运行中拒绝
-  ✅ 下载修复 — session_id 传递 + 文件路径回退查找
+  ✅ UI v1 — 深邃星空设计系统 + 三栏布局
 
 Day 8 核心交付:
-  ✅ 文档工程化转型 — 清除论文痕迹，重定位为产品
-  ✅ 论文搜索根治 — OpenAlex 主力 (国内可用) + Semantic Scholar 备选
-  ✅ 工具熔断优化 — 阈值 3→5、全局速率限制
+  ✅ 工程化转型 — 清除论文痕迹，重定位为 AI 深度研究助手产品
+  ✅ 论文搜索根治 — OpenAlex 主力 (国内可用)
 
-测试: 355 passed, 4 skipped, 0 failed
-Git: 待 commit
+Day 9 核心交付:
+  ✅ SQLite 会话持久化 — 双后端(内存+SQLite)，缓存机制，重启不丢失
+  ✅ 会话历史 API — GET/DELETE /api/sessions，分页列表
+  ✅ React 18 前端重写 — htm 零构建，全部静态资源本地化 (184KB)
+  ✅ ChromaDB 向量数据库 — L3 双后端(faiss+chromadb)，元数据过滤，自动持久化
+  ✅ SSE Token 流式 + 阶段时间线 + 工具调用日志
+
+测试: 414 passed, 4 skipped, 0 failed (+59 tests)
 ```
 
 ## Architecture
@@ -92,16 +91,20 @@ src/horizonrl/
 │   └── dag_workflow.py  ResearchOrchestrator: LangGraph 6 节点 DAG
 │                       session_id 注入 · writer 注入 · logger 注入 · L3 注入
 │
-├── web/               Web 界面 (FastAPI v4)
-│   ├── app.py         应用工厂 · lifespan · CORS · 静态挂载
+├── web/               Web 界面 (React 18 SPA, v0.2.0)
+│   ├── app.py         应用工厂 · lifespan · CORS · 静态挂载 · 懒加载 SQLite
 │   ├── models.py      请求/响应 Pydantic 模型 (5 个)
-│   ├── session_manager.py  SessionState · SessionManager (类型化状态 + TTL)
+│   ├── session_manager.py  SessionState · SessionManager (内存) · SqliteSessionManager (缓存+SQLite)
 │   ├── routes/
 │   │   ├── chat.py    POST /api/chat (chat/deep 双模式)
-│   │   ├── stream.py  GET /api/stream/{sid} (SSE + asyncio.Queue 桥接)
-│   │   └── report.py  GET /api/report + /api/download
-│   ├── templates/     Jinja2 模板
-│   └── static/        CSS (设计系统) + JS (模块化: app/sse-client/markdown)
+│   │   ├── stream.py  GET /api/stream/{sid} (SSE + asyncio.Queue 桥接 + 防重入)
+│   │   ├── report.py  GET /api/report/{sid} + /api/download/{sid}/{kind}
+│   │   └── sessions.py  GET/DELETE /api/sessions (历史会话 CRUD)
+│   ├── templates/     Jinja2 模板 (仅 index.html 骨架)
+│   └── static/
+│       ├── css/style.css   v6.0 暗色专业风格 · 三栏响应式
+│       ├── js/app.js       React 18 + htm SPA (useReducer 状态管理)
+│       └── js/vendor/      React 10KB · ReactDOM 132KB · htm 1.5KB · marked 40KB
 │
 ├── memory/            分层记忆
 │   └── hierarchical_memory.py  L1RecentWindow · L2SemanticSummary · L3EpisodicArchive
@@ -164,12 +167,14 @@ StepResult + EvidenceItem[] (SearchProvenance)
 | `L3EpisodicArchive` | memory/ | FAISS 向量检索 + 持久化 |
 | `TrajectoryLogger` | logging/ | 异步 JSONL + 25+ per-node 事件 |
 | `SessionArtifacts` | services/ | 会话完整产出 (报告/轨迹/统计/指标) |
+| `SessionManager` | web/ | 内存会话管理 (开发/测试用) |
+| `SqliteSessionManager` | web/ | SQLite 持久化 + 缓存机制 (生产用) |
 | `Evaluator` | benchmarks/ | 结构化评测 (mock_ratio/citation/trajectory) |
 
 ## Running
 
 ```bash
-# 测试 (355 tests)
+# 测试 (384 tests)
 python -m pytest tests/ -v
 
 # Demo (7 个)

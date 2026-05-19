@@ -1,5 +1,5 @@
 """
-HorizonRL-Agent 数据模型层（Schema Layer）。
+Horizon-Agent 数据模型层（Schema Layer）。
 
 所有模块依赖的数据结构在此定义。在写任何功能代码之前，
 先在此冻结数据结构，确保模块间协议统一。

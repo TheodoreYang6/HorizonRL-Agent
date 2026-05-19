@@ -582,7 +582,7 @@ def _build_default_tool_manager(search_provider: str = "auto", offline: bool = F
         from horizonrl.tools.mock import MockWebSearch
         mgr.register("web_search", MockWebSearch())
 
-    # Arxiv Search
+    # Paper Search (多后端并发竞速: OpenAlex + S2 + Arxiv)
     try:
         from horizonrl.tools.paper_search import PaperSearchTool
         mgr.register("paper_search", PaperSearchTool(max_results=5))

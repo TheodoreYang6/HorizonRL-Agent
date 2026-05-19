@@ -410,12 +410,14 @@ class TestHierarchicalMemory:
         assert mem.get_stats()["replan_count"] == 0
 
     def test_archive_to_l3(self):
-        mem = HierarchicalMemory()
+        from horizonrl.config.settings import MemoryConfig
+        mem = HierarchicalMemory(config=MemoryConfig(l3_backend="faiss"))
         mem.archive_to_l3_sync("重要经验", {"task": "搜索"})
         assert mem.get_stats()["l3_count"] == 1
 
     def test_retrieve_l3(self):
-        mem = HierarchicalMemory()
+        from horizonrl.config.settings import MemoryConfig
+        mem = HierarchicalMemory(config=MemoryConfig(l3_backend="faiss"))
         mem.archive_to_l3_sync("Transformer注意力机制分析结果")
         mem.archive_to_l3_sync("LLaMA架构研究")
         results = mem.retrieve_l3("Transformer")
@@ -540,8 +542,10 @@ class TestMemoryEdgeCases:
 
 
 class TestL3EpisodicArchive:
+    """L3 测试 — 使用 FAISS 后端确保隔离。"""
+
     def test_archive_and_keyword_search(self):
-        l3 = L3EpisodicArchive()
+        l3 = L3EpisodicArchive(backend="faiss")
         l3.archive_sync("Transformer注意力机制在NLP中广泛应用", {"task": "搜索"})
         l3.archive_sync("Python asyncio是异步编程的核心库")
         l3.archive_sync("量子计算使用量子比特进行并行计算")
@@ -550,12 +554,12 @@ class TestL3EpisodicArchive:
         assert any("Transformer" in r for r in results)
 
     def test_search_no_match(self):
-        l3 = L3EpisodicArchive()
+        l3 = L3EpisodicArchive(backend="faiss")
         l3.archive_sync("测试内容")
         assert l3.search("不存在的关键词") == []
 
     def test_clear(self):
-        l3 = L3EpisodicArchive()
+        l3 = L3EpisodicArchive(backend="faiss")
         l3.archive_sync("测试", {"key": "val"})
         assert l3.count == 1
         l3.clear()
@@ -563,20 +567,20 @@ class TestL3EpisodicArchive:
 
     def test_save_and_load(self, tmp_path):
         """测试 L3 持久化往返。"""
-        l3 = L3EpisodicArchive(index_path=str(tmp_path / "test_index"))
+        l3 = L3EpisodicArchive(index_path=str(tmp_path / "test_index"), backend="faiss")
         l3.archive_sync("Transformer注意力机制最新进展")
         l3.archive_sync("LLaMA架构中的RoPE位置编码")
         l3.save()
 
         # 加载
-        l3_loaded = L3EpisodicArchive(index_path=str(tmp_path / "test_index"))
+        l3_loaded = L3EpisodicArchive(index_path=str(tmp_path / "test_index"), backend="faiss")
         if l3_loaded.load():
             assert l3_loaded.count == 2
             results = l3_loaded.search("Transformer")
             assert len(results) > 0
 
     def test_count(self):
-        l3 = L3EpisodicArchive()
+        l3 = L3EpisodicArchive(backend="faiss")
         assert l3.count == 0
         l3.archive_sync("a")
         l3.archive_sync("b")
@@ -584,7 +588,7 @@ class TestL3EpisodicArchive:
 
     def test_vector_search_falls_back_to_keyword(self):
         """FAISS 不可用时回退关键词检索。"""
-        l3 = L3EpisodicArchive()
+        l3 = L3EpisodicArchive(backend="faiss")
         l3.archive_sync("第一条重要经验")
         l3.archive_sync("第二条无关内容")
         # 关键词检索
@@ -593,8 +597,10 @@ class TestL3EpisodicArchive:
         assert "重要" in results[0]
 
     def test_hierarchical_memory_l3_integration(self):
-        """HierarchicalMemory 的 L3 接口正常工作。"""
-        mem = HierarchicalMemory()
+        """HierarchicalMemory 的 L3 接口正常工作 (FAISS)。"""
+        from horizonrl.config.settings import MemoryConfig
+        cfg = MemoryConfig(l3_backend="faiss")
+        mem = HierarchicalMemory(config=cfg)
         mem.archive_to_l3_sync("Transformer经验1")
         mem.archive_to_l3_sync("asyncio经验2")
         mem.archive_to_l3_sync("量子计算经验3")
@@ -611,6 +617,166 @@ class TestL3EpisodicArchive:
         # 清空
         mem.clear()
         assert mem.get_stats()["l3_count"] == 0
+
+
+# ─── ChromaDB Vector Store ────────────────────────────────────────────────
+
+
+class TestChromaVectorStore:
+    """ChromaDB 向量存储测试。"""
+
+    def test_init_and_count(self, tmp_path):
+        from horizonrl.memory.vector_store import ChromaVectorStore
+        store = ChromaVectorStore(persist_dir=str(tmp_path / "test_chroma"))
+        assert store.count() == 0
+
+    def test_add_and_count(self, tmp_path):
+        from horizonrl.memory.vector_store import ChromaVectorStore
+        store = ChromaVectorStore(persist_dir=str(tmp_path / "test_chroma"))
+        store.add(
+            embeddings=[[0.1] * 128, [0.2] * 128],
+            keys=["k1", "k2"],
+            metadata=[{"text": "记录1"}, {"text": "记录2"}],
+        )
+        assert store.count() == 2
+
+    def test_search(self, tmp_path):
+        from horizonrl.memory.vector_store import ChromaVectorStore
+        store = ChromaVectorStore(persist_dir=str(tmp_path / "test_chroma"))
+        store.add(
+            embeddings=[[0.5] * 128, [0.9] * 128, [0.1] * 128],
+            keys=["a", "b", "c"],
+            metadata=[
+                {"text": "Transformer注意力"},
+                {"text": "asyncio异步编程"},
+                {"text": "量子计算"},
+            ],
+        )
+        results = store.search([0.5] * 128, top_k=2)
+        assert len(results) == 2
+        assert "key" in results[0]
+        assert "score" in results[0]
+
+    def test_search_with_filter(self, tmp_path):
+        from horizonrl.memory.vector_store import ChromaVectorStore
+        store = ChromaVectorStore(persist_dir=str(tmp_path / "test_chroma"))
+        store.add(
+            embeddings=[[0.5] * 128, [0.7] * 128],
+            keys=["x", "y"],
+            metadata=[
+                {"text": "重要发现", "source": "web"},
+                {"text": "无关内容", "source": "paper"},
+            ],
+        )
+        results = store.search([0.5] * 128, top_k=2, filter_meta={"source": "web"})
+        assert len(results) == 1
+        assert results[0]["metadata"]["source"] == "web"
+
+    def test_clear(self, tmp_path):
+        from horizonrl.memory.vector_store import ChromaVectorStore
+        store = ChromaVectorStore(persist_dir=str(tmp_path / "test_chroma"))
+        store.add(embeddings=[[0.3] * 128], keys=["k1"], metadata=[{"text": "x"}])
+        assert store.count() == 1
+        store.clear()
+        assert store.count() == 0
+
+    def test_delete_by_keys(self, tmp_path):
+        from horizonrl.memory.vector_store import ChromaVectorStore
+        store = ChromaVectorStore(persist_dir=str(tmp_path / "test_chroma"))
+        store.add(
+            embeddings=[[0.1] * 128, [0.2] * 128, [0.3] * 128],
+            keys=["a", "b", "c"],
+        )
+        store.delete_by_keys(["a", "c"])
+        assert store.count() == 1
+
+    def test_persistence(self, tmp_path):
+        """ChromaDB 自动持久化，重启后数据不丢。"""
+        from horizonrl.memory.vector_store import ChromaVectorStore
+        d = str(tmp_path / "persist_test")
+        store1 = ChromaVectorStore(persist_dir=d)
+        store1.add(embeddings=[[0.5] * 128], keys=["p1"], metadata=[{"text": "持久化测试"}])
+        assert store1.count() == 1
+
+        # 新建实例，自动加载
+        store2 = ChromaVectorStore(persist_dir=d)
+        assert store2.count() == 1
+        results = store2.search([0.5] * 128, top_k=1)
+        assert results[0]["metadata"]["text"] == "持久化测试"
+
+    def test_metadata_stringify(self, tmp_path):
+        """非标量 metadata 自动转字符串。"""
+        from horizonrl.memory.vector_store import ChromaVectorStore
+        store = ChromaVectorStore(persist_dir=str(tmp_path / "test_chroma"))
+        store.add(
+            embeddings=[[0.5] * 128],
+            keys=["m1"],
+            metadata=[{"tags": ["ai", "nlp"], "count": 42, "score": 0.95}],
+        )
+        results = store.search([0.5] * 128, top_k=1)
+        meta = results[0]["metadata"]
+        assert isinstance(meta["tags"], str)
+        assert "ai" in meta["tags"]
+
+
+# ─── L3EpisodicArchive ChromaDB Backend ───────────────────────────────────
+
+
+class TestL3ChromaDB:
+    """L3EpisodicArchive 使用 ChromaDB 后端。"""
+
+    def test_archive_and_search_chroma(self, tmp_path):
+        l3 = L3EpisodicArchive(index_path=str(tmp_path / "l3_chroma"), backend="chromadb")
+        l3.archive_sync("Transformer注意力机制最新进展")
+        l3.archive_sync("Python asyncio异步编程核心库")
+        l3.archive_sync("量子计算与量子比特")
+        assert l3.count == 3
+        # 检索
+        results = l3.search("Transformer")
+        assert len(results) > 0
+
+    def test_clear_chroma(self, tmp_path):
+        l3 = L3EpisodicArchive(index_path=str(tmp_path / "l3_clear"), backend="chromadb")
+        l3.archive_sync("测试内容", {"key": "val"})
+        assert l3.count == 1
+        l3.clear()
+        assert l3.count == 0
+
+    def test_persistence_chroma(self, tmp_path):
+        """ChromaDB 自动持久化，新实例加载旧数据。"""
+        d = str(tmp_path / "l3_persist")
+        l3_1 = L3EpisodicArchive(index_path=d, backend="chromadb")
+        l3_1.archive_sync("重要经验数据")
+        l3_1.archive_sync("次要内容")
+
+        l3_2 = L3EpisodicArchive(index_path=d, backend="chromadb")
+        assert l3_2.count == 2
+        results = l3_2.search("重要")
+        assert len(results) > 0
+
+    def test_hierarchical_memory_uses_chromadb(self, tmp_path):
+        """HierarchicalMemory 使用 ChromaDB 后端。"""
+        from horizonrl.config.settings import MemoryConfig
+        cfg = MemoryConfig(
+            l3_backend="chromadb",
+            l3_index_path=str(tmp_path / "hm_chroma"),
+        )
+        mem = HierarchicalMemory(config=cfg)
+        mem.archive_to_l3_sync("第一条经验", {"source": "test"})
+        mem.archive_to_l3_sync("第二条经验")
+        assert mem.get_stats()["l3_count"] == 2
+        results = mem.retrieve_l3("第一条")
+        assert len(results) > 0
+
+    def test_faiss_fallback_when_chromadb_unavailable(self, tmp_path):
+        """指定 chromadb 但不可用时，自动回退 FAISS 关键词检索。"""
+        l3 = L3EpisodicArchive(index_path=str(tmp_path / "l3_fallback"), backend="faiss")
+        l3.archive_sync("回退测试内容")
+        assert l3.count == 1
+        results = l3.search("回退")
+        assert len(results) > 0
+        # 确认用的是 FAISS/关键词路径
+        assert not l3._use_chroma
 
     def test_l3_embed_sync_consistent(self):
         """相同文本生成相同向量。"""

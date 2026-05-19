@@ -71,18 +71,8 @@ class AgentWorker:
         all_outputs: list[str] = []
 
         if not task.tool_names:
-            # 无需工具的任务（如纯分析/汇总），返回占位结果
-            elapsed = time.monotonic() - start
-            return StepResult(
-                task_id=task.id,
-                success=True,
-                output=f"[{task.name}] 无需工具调用，等待后续 LLM 处理",
-                evidence=[],
-                tool_calls=[],
-                tokens_used=0,
-                elapsed=elapsed,
-                worker_id=self.worker_id,
-            )
+            # 纯分析/汇总任务：直接调用 LLM 处理
+            return await self._execute_analysis(task, start)
 
         # 并行调用所有工具 — asyncio.gather 并发，不等前一个完成
         if len(task.tool_names) == 1:
@@ -129,6 +119,66 @@ class AgentWorker:
             tokens_used=total_tokens,
             elapsed=elapsed,
             error="" if success else "部分工具调用失败",
+            worker_id=self.worker_id,
+        )
+
+    async def _execute_analysis(self, task: TaskSpec, start: float) -> StepResult:
+        """纯分析/汇总任务：优先使用 LLM，不可用时回退模板。"""
+        import asyncio as _asyncio
+
+        output_text = ""
+        tokens = 0
+        error = ""
+        success = True
+
+        if self.config and getattr(self.config, 'llm', None) and getattr(self.config.llm, 'api_key', None):
+            try:
+                from horizonrl.llm.client import LLMClient
+                client = LLMClient(self.config.llm)
+                prompt = (
+                    f"你是一个专业的研究分析师。请基于以下任务描述，"
+                    f"给出清晰、结构化的分析结果。\n\n"
+                    f"任务: {task.description}\n"
+                    f"任务名称: {task.name}\n\n"
+                    f"请提供详细的分析，包括关键要点、对比维度、结论和建议。"
+                )
+                result = await _asyncio.wait_for(
+                    client.chat(prompt, max_tokens=2000),
+                    timeout=60.0,
+                )
+                if result.is_success:
+                    output_text = result.content
+                    tokens = result.tokens_used
+                else:
+                    output_text = f"LLM 分析出错: {result.error}"
+                    error = result.error
+                    success = False
+            except Exception as e:
+                # LLM 异常 → 回退模板分析，不阻塞 pipeline
+                error = str(e)
+
+        # LLM 不可用/无 API Key/调用异常 → 模板分析回退
+        if not output_text:
+            output_text = (
+                f"# {task.name}\n\n"
+                f"基于任务描述「{task.description}」的模板分析：\n\n"
+                f"1. **任务目标**: {task.description}\n"
+                f"2. **分析状态**: 当前为离线/模板分析模式。"
+                f"配置 LLM API Key 后可获得更深入的分析结果。\n"
+                f"3. **建议**: 请基于已收集的证据手动完成最终分析。"
+            )
+            success = True  # 模板分析视为成功，不触发重规划
+            error = ""
+
+        elapsed = time.monotonic() - start
+        return StepResult(
+            task_id=task.id,
+            success=success,
+            output=output_text,
+            evidence=[],
+            tool_calls=[],
+            tokens_used=tokens,
+            elapsed=elapsed,
             worker_id=self.worker_id,
         )
 

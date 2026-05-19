@@ -42,7 +42,7 @@ class WriterConfig:
     """Writer 运行策略配置。"""
 
     enable_llm_writer: bool = True
-    default_author: str = "HorizonRL-Agent"
+    default_author: str = "Horizon-Agent"
     include_debug_stats: bool = False
     export_dir: str = "reports"
     max_evidence_items: int = 10
@@ -236,7 +236,7 @@ class DebugReportRenderer:
             lines.append("")
 
         lines.append("---")
-        lines.append("*Debug Report — HorizonRL-Agent v0.1.0*")
+        lines.append("*Debug Report — Horizon-Agent v0.1.0*")
         return "\n".join(lines)
 
     def _collect_tasks(self, plan, results, verifications):
@@ -465,7 +465,7 @@ class UserAnswerWriter:
 
         if metadata:
             lines.append("---")
-            lines.append(f"*本答案由 HorizonRL-Agent 自动生成*")
+            lines.append(f"*本答案由 Horizon-Agent 自动生成*")
         return "\n".join(lines)
 
 # ╔══════════════════════════════════════════════════════════════════════════════╗
