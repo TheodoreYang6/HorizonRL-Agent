@@ -1,9 +1,9 @@
-# Horizon-Agent 开发路线图 v15.0 (Phase 1 80%)
+# Horizon-Agent 开发路线图 v21.0 (Phase 3 60%)
 
-> **更新日期**: 2026-05-19
+> **更新日期**: 2026-05-23
 > **方向**: Horizon-Agent · 溯证智搜 — 多 Agent 协同 · 三层记忆 · 证据溯源
-> **测试**: 384 passed, 4 skipped, 0 failed
-> **Git**: 待 commit
+> **测试**: 495 passed, 4 skipped, 1 known failure
+> **Git**: 已 push GitHub
 
 ---
 
@@ -31,12 +31,16 @@
 ### Day 6-7: 架构收敛 + Web v4 ✅
 ### Day 8: 工程化转型 + 文档重写 ✅
 ### Day 9: Web 产品化 + React SPA ✅
+### Day 10: 插件系统 + 多数据源 + RAG 混合 ✅
+### Day 11: 文档整理 + RAG 解析 + Git 提交 ✅
 
 ```
 Day 6 (05/15): 架构收敛    — 共享 Service 层 · Benchmark 重构 · L3 Embedding · 17+ Bug修复
 Day 7 (05/16): Web v4      — FastAPI 迁移 · UI 美化 · SSE 防重入 · 下载修复
 Day 8 (05/18): 工程化转型   — 论文搜索根治 · 文档清洗 · 产品路线图
-Day 9 (05/19): Web 产品化   — SQLite 持久化 · 会话历史 API · React 18 SPA · 384 tests
+Day 9 (05/19): Web 产品化   — SQLite 持久化 · 会话历史 API · React 18 SPA · 414 tests
+Day 10 (05/20): 能力扩展    — 插件框架 · 5 数据源 · RAG 混合 · 495 tests
+Day 11 (05/23): 文档更新    — RAG 技术解析 · 项目文档刷写 · Git 提交推送
 ```
 
 ## 四、Demo 列表 (7 个)
@@ -55,15 +59,16 @@ Day 9 (05/19): Web 产品化   — SQLite 持久化 · 会话历史 API · React
 
 | 维度 | 数值 |
 |------|------|
-| 源码文件 | 37 (+4 Web路由/sessions/vendor) |
-| 测试文件 | 13 |
+| 源码文件 | 50 (+3 vs Day 9 plugins/rag/routes) |
+| 测试文件 | 16 |
 | Demo | 7 |
-| Tests | 414 passed, 4 skipped |
+| Tests | 495 passed, 4 skipped |
 | Task types | 5 |
-| Web routes | 7 (FastAPI + OpenAPI docs) |
+| Web routes | 12 (FastAPI + OpenAPI docs) |
 | 前端框架 | React 18 + htm (零构建) |
-| 向量数据库 | FAISS (默认) + ChromaDB (生产推荐) |
+| 向量数据库 | ChromaDB (L3 + RAG 共用) |
 | 静态资源总量 | 184KB (全部本地化) |
+| 插件 | 5 (github/rss/pubmed/retrieval/echo) |
 
 ---
 
@@ -94,14 +99,14 @@ Day 9 (05/19): Web 产品化   — SQLite 持久化 · 会话历史 API · React
 ✅ 用户 API Key 管理页    — Web 界面配置, .env 读写 (Day 9)
 ```
 
-### Phase 3: 能力扩展 (1-2 月)
+### Phase 3: 能力扩展 (1-2 月) — 60% 完成
 
 目标: 更多数据源、更强能力
 
 ```
-□ 工具插件机制           — 用户可注册自定义工具
-□ 更多数据源             — GitHub、RSS、数据库
-□ RAG + Agent 混合模式   — 本地文档上传 + 在线搜索
+✅ 工具插件机制           — ToolPlugin 基类 + PluginRegistry 自动发现 + AgentWorker 通用分发 (Day 10)
+✅ 更多数据源             — GitHub (仓库/代码/Issues) + RSS/Atom 源 + PubMed 生物医学 (Day 10)
+✅ RAG + Agent 混合模式   — 文档上传/解析/ChromaDB 索引/语义检索 (Day 10)
 □ 定时研究任务           — 定期追踪某个话题
 □ 多语言支持             — i18n 框架
 ```
@@ -133,4 +138,4 @@ Day 9 (05/19): Web 产品化   — SQLite 持久化 · 会话历史 API · React
 
 ---
 
-*本文件 v19.0 — 2026-05-19 Horizon-Agent · Phase 1+2 完成 · Phase 3 待开始 · 414 tests*
+*本文件 v21.0 — 2026-05-23 Horizon-Agent · Phase 1-3 60% · Phase 4 待开始 · 495 tests*

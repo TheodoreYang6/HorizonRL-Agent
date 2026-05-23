@@ -203,7 +203,13 @@ class AgentWorker:
         return await self.tool_manager.call(request)
 
     def _build_params(self, tool_name: str, task: TaskSpec) -> dict:
-        """根据工具类型构建合适的参数。"""
+        """根据工具类型构建合适的参数。插件工具优先走插件分发。"""
+        # 插件分发：工具是插件则委托插件的 build_params()
+        if self.tool_manager is not None:
+            plugin = self.tool_manager.get_plugin_meta(tool_name)
+            if plugin is not None:
+                return plugin.build_params(task.description, task.context)
+
         if tool_name in ("web_search", "arxiv_search", "paper_search", "retrieval"):
             query = self._clean_search_query(task.description)
             if tool_name in ("arxiv_search", "paper_search"):
@@ -246,15 +252,31 @@ class AgentWorker:
     ) -> list[EvidenceItem]:
         """从工具输出中提取 EvidenceItem 列表。
 
-        Args:
-            tool_name: 工具名称。
-            output: 工具原始输出（可能是字符串化的 JSON）。
-            task_id: 关联的任务 ID。
-            task_description: 任务描述，用作 search_query fallback。
-
-        Returns:
-            EvidenceItem 列表。
+        插件工具优先走插件分发。
         """
+        # 插件分发：工具是插件则委托插件的 extract_evidence()
+        if self.tool_manager is not None:
+            plugin = self.tool_manager.get_plugin_meta(tool_name)
+            if plugin is not None:
+                from horizonrl.plugins.base import PluginEvidence
+                plugin_evs: list[PluginEvidence] = plugin.extract_evidence(
+                    output, task_description
+                )
+                now = time.time()
+                items: list[EvidenceItem] = []
+                for pe in plugin_evs:
+                    items.append(EvidenceItem(
+                        content=pe.content,
+                        source=pe.source or tool_name,
+                        source_type=pe.source_type,
+                        relevance_score=pe.relevance_score,
+                        provider=getattr(plugin, "name", tool_name),
+                        search_query=task_description,
+                        is_mock=pe.is_mock,
+                        retrieved_at=now,
+                    ))
+                return items
+
         items: list[EvidenceItem] = []
         now = time.time()
         query_text = task_description or task_id

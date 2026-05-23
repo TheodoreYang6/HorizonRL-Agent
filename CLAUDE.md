@@ -24,28 +24,24 @@ This file provides guidance to Claude Code when working in this repository.
 | 个人偏好 | `CLAUDE.local.md`（git-ignored） |
 | API 配置 | `.env.example` → 复制为 `.env` |
 
-## Development Status (2026-05-19 Day 9 — Phase 1+2 完成)
+## Development Status (2026-05-23 Day 11 — Phase 3 60%)
 
 ```
 Phase 1: ████████████ 100% (5/5) 产品化基础
 Phase 2: ████████████ 100% (6/6) 体验优化
+Phase 3: ██████░░░░░░  60% (3/5) 能力扩展
 
-Day 9 交付:
-  ✅ SQLite 会话持久化 — 双后端(内存+SQLite), 缓存机制, 自动迁移
-  ✅ 会话历史 CRUD — 7 REST 端点, 分页列表, 删除确认
-  ✅ React 18 SPA — htm 零构建, 184KB 本地化, 三栏响应式
-  ✅ ChromaDB 向量数据库 — L3 双后端, 元数据过滤, 自动持久化 (默认)
-  ✅ 100+ 环境变量覆盖 — 全部模块可通过 .env/HORIZON_ 配置
-  ✅ GitHub Actions CI/CD — Test Matrix (3.10-3.13) + lint + benchmark smoke
-  ✅ 论文搜索 5 后端竞速 — OpenAlex‖S2‖Arxiv Pkg‖Arxiv API×2‖Mock
-  ✅ Research Context Engine — 研究上下文引擎, 语义检索替代文本拼接
-  ✅ 多轮对话 — 上下文继承, conversation_history 自动追加
-  ✅ 暗色/亮色主题 — CSS 变量切换 + localStorage 持久化
-  ✅ 研究任务模板 — 5 种模板: 综述/对比/摘要/解释/代码
-  ✅ API Key 管理页 — Web 配置, .env 读写
-  ✅ ruff lint 零错误 — 30+ 文件自动修复
+Day 10 交付: (已 commit → GitHub)
+  ✅ 工具插件机制 — ToolPlugin 基类 + PluginRegistry 文件发现 + AgentWorker 通用分发
+  ✅ 5 个插件 — echo_tool(示例) / github_search / rss_feed / pubmed_search / retrieval_tool
+  ✅ 更多数据源 — GitHub (仓库/代码/Issues) + RSS/Atom + PubMed 生物医学
+  ✅ RAG + Agent 混合 — 文档上传/解析/ChromaDB 索引/语义检索 + retrieval_tool
+  ✅ 文档管理 API — 3 REST 端点 (upload/list/delete) + 前端上传界面
+  ✅ Planner 感知插件 — LLMPlanner 动态列出工具, 插件参与研究流程
 
-测试: 414 passed, 4 skipped, 0 failed (+59 vs Day 8)
+Day 11: 文档整理 · RAG 技术解析 · 代码提交 GitHub
+
+测试: 495 passed, 4 skipped, 1 known failure
 ```
 
 ## Architecture
@@ -65,12 +61,19 @@ src/horizonrl/
 │   └── research_service.py  SessionArtifacts · run/stream · 模式判断 · L3注入
 │
 ├── tools/             工具层 (6 文件)
-│   ├── manager.py     ToolManager: 超时/重试/熔断/统计/结果规范化
+│   ├── manager.py     ToolManager: 超时/重试/熔断/统计/结果规范化 + 插件分发
 │   ├── web_search.py  5 后端并发竞速 (Bocha/Brave/DDGS/Wikipedia/Mock)
 │   ├── paper_search.py  OpenAlex + Semantic Scholar, 国内可用 + Mock 兜底
 │   ├── arxiv_search.py  原 Arxiv 搜索 (保留兼容)
 │   ├── code_execution.py  AST 检测 + 5 模板自动生成 + 安全沙箱
 │   └── mock.py        离线/CI 用 Mock 工具
+│
+├── plugins/           数据源插件 (5 个, Day 10) — plugins/ 目录自动发现
+│   ├── echo_tool      示例插件 (回显)
+│   ├── github_search  GitHub REST API v3 (仓库/代码/Issues)
+│   ├── rss_feed       RSS/Atom 源拉取解析 (feedparser + stdlib 回退)
+│   ├── pubmed_search  NCBI Entrez E-utilities (生物医学论文)
+│   └── retrieval_tool 本地文档语义检索 (RAG)
 │
 ├── llm/               LLM 客户端
 │   └── client.py      chat() + chat_stream() + embed() · OpenAI 兼容
@@ -91,10 +94,12 @@ src/horizonrl/
 │   ├── models.py      请求/响应 Pydantic 模型 (5 个)
 │   ├── session_manager.py  SessionState · SessionManager (内存) · SqliteSessionManager (缓存+SQLite)
 │   ├── routes/
-│   │   ├── chat.py    POST /api/chat (chat/deep 双模式)
-│   │   ├── stream.py  GET /api/stream/{sid} (SSE + asyncio.Queue 桥接 + 防重入)
-│   │   ├── report.py  GET /api/report/{sid} + /api/download/{sid}/{kind}
-│   │   └── sessions.py  GET/DELETE /api/sessions (历史会话 CRUD)
+│   │   ├── chat.py      POST /api/chat (chat/deep 双模式)
+│   │   ├── stream.py    GET /api/stream/{sid} (SSE + asyncio.Queue 桥接 + 防重入)
+│   │   ├── report.py    GET /api/report/{sid} + /api/download/{sid}/{kind}
+│   │   ├── sessions.py  GET/DELETE /api/sessions (历史会话 CRUD)
+│   │   ├── settings.py  GET/POST /api/settings/* (配置 + API Key 管理)
+│   │   └── documents.py POST/GET/DELETE /api/documents/* (文档上传/RAG)
 │   ├── templates/     Jinja2 模板 (仅 index.html 骨架)
 │   └── static/
 │       ├── css/style.css   v6.0 暗色专业风格 · 三栏响应式
@@ -102,8 +107,18 @@ src/horizonrl/
 │       └── js/vendor/      React 10KB · ReactDOM 132KB · htm 1.5KB · marked 40KB
 │
 ├── memory/            分层记忆
-│   └── hierarchical_memory.py  L1RecentWindow · L2SemanticSummary · L3EpisodicArchive
-│                               (DashScope Embedding API / n-gram MD5 回退)
+│   ├── hierarchical_memory.py  L1RecentWindow · L2SemanticSummary · L3EpisodicArchive
+│   │                           (DashScope Embedding API / n-gram MD5 回退)
+│   ├── vector_store.py         ChromaVectorStore (L3 + RAG 共用)
+│   └── research_context.py     ResearchContextStore (跨会话语义检索)
+│
+├── plugins/           工具插件系统 (Day 10)
+│   ├── base.py                ToolPlugin 抽象基类 · PluginConfig/Params/Evidence
+│   └── registry.py            PluginRegistry importlib 文件扫描发现
+│
+├── rag/               RAG 文档检索 (Day 10)
+│   ├── parser.py              文档解析 (PDF/TXT/MD → 纯文本)
+│   └── document_store.py      DocumentStore ChromaDB 分块索引 · 语义检索
 │
 └── logging/           轨迹日志
     └── trajectory_logger.py  TrajectoryLogger (异步 JSONL) + 5 分析工具
@@ -164,6 +179,9 @@ StepResult + EvidenceItem[] (SearchProvenance)
 | `SessionArtifacts` | services/ | 会话完整产出 (报告/轨迹/统计/指标) |
 | `SessionManager` | web/ | 内存会话管理 (开发/测试用) |
 | `SqliteSessionManager` | web/ | SQLite 持久化 + 缓存机制 (生产用) |
+| `ToolPlugin` | plugins/base.py | 插件抽象基类 (Day 10) |
+| `PluginRegistry` | plugins/registry.py | importlib 文件扫描发现 (Day 10) |
+| `DocumentStore` | rag/document_store.py | ChromaDB 文档分块索引/检索 (Day 10) |
 | `Evaluator` | benchmarks/ | 结构化评测 (mock_ratio/citation/trajectory) |
 
 ## Running

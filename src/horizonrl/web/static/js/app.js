@@ -66,6 +66,8 @@ const init = {
   histPage: 0,
   histTotal: 0,
   histLoading: false,
+  docs: [],
+  docLoading: false,
   stats: { toolCalls: 0, toolSuccess: 0, toolFail: 0, verifications: 0, runtime: '--' },
   stages: [
     { id: 'plan',   name: '任务规划',   label: '等待开始', dot: '', lineDone: false, showBar: false, prog: 0, last: false },
@@ -197,6 +199,27 @@ function App() {
     localStorage.setItem('theme', theme);
   }, [theme]);
   function toggleTheme() { setTheme(theme === 'dark' ? 'light' : 'dark'); }
+
+  // 上传区域拖拽和点击事件
+  useEffect(function() {
+    var zone = document.getElementById('uploadDropZone');
+    var input = document.getElementById('docFileInput');
+    if (!zone || !input) return;
+    function onClick() { input.click(); }
+    function onDragOver(e) { e.preventDefault(); zone.style.borderColor = 'var(--accent)'; }
+    function onDragLeave() { zone.style.borderColor = 'var(--border-color)'; }
+    function onDrop(e) { e.preventDefault(); zone.style.borderColor = 'var(--border-color)'; if (e.dataTransfer.files[0]) uploadDoc(e.dataTransfer.files[0]); }
+    zone.addEventListener('click', onClick);
+    zone.addEventListener('dragover', onDragOver);
+    zone.addEventListener('dragleave', onDragLeave);
+    zone.addEventListener('drop', onDrop);
+    return function() {
+      zone.removeEventListener('click', onClick);
+      zone.removeEventListener('dragover', onDragOver);
+      zone.removeEventListener('dragleave', onDragLeave);
+      zone.removeEventListener('drop', onDrop);
+    };
+  }, [s.tab]);
 
   var scrollDown = useCallback(function() {
     setTimeout(function() {
@@ -521,6 +544,34 @@ function App() {
     } catch(e) { toast('删除失败: '+e.message, 'err'); }
   }
 
+  // ── Documents ────────────────────────────────────────────────────
+  async function loadDocs() {
+    dispatch({ type: 'SET', payload: { docLoading: true } });
+    try {
+      var r = await fetch('/api/documents');
+      var d = await r.json();
+      dispatch({ type: 'SET', payload: { docs: d.documents || [], docLoading: false } });
+    } catch(e) { dispatch({ type: 'SET', payload: { docLoading: false } }); }
+  }
+  async function uploadDoc(file) {
+    var fd = new FormData();
+    fd.append('file', file);
+    try {
+      var r = await fetch('/api/documents/upload', { method: 'POST', body: fd });
+      var d = await r.json();
+      if (d.ok) { toast(d.filename + ' 已索引(' + d.chunk_count + '块)', 'ok'); loadDocs(); }
+      else { toast(d.error || '上传失败', 'err'); }
+    } catch(e) { toast('上传失败: '+e.message, 'err'); }
+  }
+  async function deleteDoc(docId) {
+    try {
+      var r = await fetch('/api/documents/'+docId, { method: 'DELETE' });
+      var d = await r.json();
+      if (d.ok) { toast('已删除', 'ok'); loadDocs(); }
+      else { toast(d.error||'删除失败', 'err'); }
+    } catch(e) { toast('删除失败: '+e.message, 'err'); }
+  }
+
   // ── Badge ────────────────────────────────────────────────────────
   var badgeClass = s.running ? 'badge-run' : (s.stats.runtime !== '--' ? 'badge-done' : 'badge-idle');
   var badgeText = s.running ? '研究中...' : (s.stats.runtime !== '--' ? '完成' : '就绪');
@@ -743,7 +794,7 @@ function App() {
 
       <aside className="sidebar">
         <div className="sidebar-head">
-          <h2>${s.tab === 'progress' ? '研究进度' : '历史会话'}</h2>
+          <h2>${s.tab === 'history' ? '历史会话' : s.tab === 'documents' ? '本地文档' : '研究进度'}</h2>
           <div className=${'sb-dot ' + s.sbDot}></div>
         </div>
 
@@ -752,6 +803,8 @@ function App() {
                   onClick=${function() { dispatch({ type: 'SET', payload: { tab: 'progress' } }); }}>当前进度</button>
           <button className=${'sidebar-tab' + (s.tab === 'history' ? ' act' : '')}
                   onClick=${function() { dispatch({ type: 'SET', payload: { tab: 'history' } }); loadHistory(); }}>历史会话</button>
+          <button className=${'sidebar-tab' + (s.tab === 'documents' ? ' act' : '')}
+                  onClick=${function() { dispatch({ type: 'SET', payload: { tab: 'documents' } }); loadDocs(); }}>本地文档</button>
         </div>
 
         ${s.tab === 'progress' && html`
@@ -777,6 +830,36 @@ function App() {
                       <div className="he-text" style=${{ fontSize: '9px' }}>发起深度研究后自动出现在这里</div>
                     </div>`
                   : html`${s.sessions.map(function(hs) { return rHistItem(hs); })}${rPager()}`}
+            </div>
+          </div>`}
+
+        ${s.tab === 'documents' && html`
+          <div className="sidebar-panel">
+            <div className="doc-upload-area" id="uploadDropZone"
+                 style=${{ border: '2px dashed var(--border-color)', borderRadius: '8px', padding: '14px', textAlign: 'center', marginBottom: '10px', cursor: 'pointer', transition: 'border-color .2s' }}>
+              <div style=${{ fontSize: '11px', color: 'var(--text-secondary)', marginBottom: '6px' }}>拖拽或点击上传文档</div>
+              <div style=${{ fontSize: '9px', color: 'var(--text-muted)' }}>PDF · TXT · MD · CSV · JSON (最大20MB)</div>
+              <input type="file" id="docFileInput" accept=".pdf,.txt,.md,.py,.json,.csv,.yaml,.yml"
+                     style=${{ display: 'none' }}
+                     onChange=${function(e) { if(e.target.files[0]) uploadDoc(e.target.files[0]); e.target.value=''; }}/>
+            </div>
+            <div className="doc-list" style=${{ flex: 1, overflowY: 'auto' }}>
+              ${s.docLoading
+                ? Array.from({ length: 3 }, function(_, i) { return html`<div key=${i} className="skel" style=${{ height: '40px', marginBottom: '4px' }}></div>`; })
+                : s.docs.length === 0
+                  ? html`<div style=${{ textAlign: 'center', fontSize: '10px', color: 'var(--text-muted)', padding: '20px' }}>暂无上传文档</div>`
+                  : s.docs.map(function(d) {
+                      return html`<div key=${d.doc_id} className="doc-item"
+                        style=${{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '8px 10px', borderBottom: '1px solid var(--border-color)', fontSize: '11px' }}>
+                        <div style=${{ flex: 1, minWidth: 0 }}>
+                          <div style=${{ color: 'var(--text-primary)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>${d.filename}</div>
+                          <div style=${{ color: 'var(--text-muted)', fontSize: '9px' }}>${d.chunk_count}块 · ${timeAgo(d.timestamp)}</div>
+                        </div>
+                        <button style=${{ background: 'none', border: 'none', color: 'var(--text-muted)', cursor: 'pointer', fontSize: '14px', padding: '2px 6px' }}
+                                onClick=${function() { deleteDoc(d.doc_id); }}
+                                title="删除文档">×</button>
+                      </div>`;
+                    })}
             </div>
           </div>`}
       </aside>

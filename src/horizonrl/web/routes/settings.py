@@ -10,7 +10,7 @@ from fastapi.responses import JSONResponse
 
 router = APIRouter()
 
-_PROVIDERS = {
+_STATIC_PROVIDERS = {
     "deepseek": {"env": "DEEPSEEK_API_KEY", "label": "DeepSeek", "url": "https://api.deepseek.com"},
     "openai": {"env": "OPENAI_API_KEY", "label": "OpenAI", "url": "https://api.openai.com"},
     "anthropic": {"env": "ANTHROPIC_API_KEY", "label": "Anthropic", "url": "https://api.anthropic.com"},
@@ -18,6 +18,34 @@ _PROVIDERS = {
     "bocha": {"env": "BOCHA_API_KEY", "label": "Bocha (Web搜索)", "url": "https://api.bocha.cn"},
     "brave": {"env": "BRAVE_API_KEY", "label": "Brave (Web搜索)", "url": "https://api.search.brave.com"},
 }
+
+
+def _get_all_providers() -> dict:
+    """合并静态提供商与插件声明的 API Key 提供商。"""
+    providers = dict(_STATIC_PROVIDERS)
+    try:
+        from horizonrl.plugins.registry import PluginRegistry
+
+        plugin_dir = os.environ.get("HORIZON_PLUGIN_DIR", "plugins")
+        if Path(plugin_dir).is_dir():
+            registry = PluginRegistry()
+            registry.discover(plugin_dir)
+            for _name, cls in registry.list_plugins().items():
+                info = cls.get_provider_info()
+                pid = info.get("provider_id", "")
+                if pid and pid not in providers:
+                    providers[pid] = {
+                        "env": info.get("env_var", ""),
+                        "label": info.get("label", cls.name),
+                        "url": info.get("url", ""),
+                    }
+    except Exception:
+        pass
+    return providers
+
+
+# 向后兼容别名
+_PROVIDERS = _get_all_providers()
 
 # 主流模型列表
 _MODELS = {
@@ -181,7 +209,7 @@ async def save_config(request: Request):
 async def list_keys(request: Request):
     env = _read_env()
     items = []
-    for provider_id, info in _PROVIDERS.items():
+    for provider_id, info in _get_all_providers().items():
         value = env.get(info["env"], "") or os.environ.get(info["env"], "")
         items.append({
             "provider": provider_id, "label": info["label"],
@@ -200,19 +228,21 @@ async def save_key(request: Request):
         return JSONResponse(status_code=400, content={"error": "无效的 JSON"})
     provider = body.get("provider", "")
     key_value = body.get("key", "").strip()
-    if provider not in _PROVIDERS:
+    providers = _get_all_providers()
+    if provider not in providers:
         return JSONResponse(status_code=400, content={"error": f"未知提供商: {provider}"})
     if not key_value:
         return JSONResponse(status_code=400, content={"error": "Key 不能为空"})
-    _write_env({_PROVIDERS[provider]["env"]: key_value})
+    _write_env({providers[provider]["env"]: key_value})
     return {"ok": True, "provider": provider, "masked": _mask_key(key_value)}
 
 
 @router.delete("/api/settings/keys/{provider}")
 async def delete_key(provider: str, request: Request):
-    if provider not in _PROVIDERS:
+    providers = _get_all_providers()
+    if provider not in providers:
         return JSONResponse(status_code=400, content={"error": f"未知提供商: {provider}"})
-    env_var = _PROVIDERS[provider]["env"]
+    env_var = providers[provider]["env"]
     _write_env({env_var: ""})
     os.environ.pop(env_var, None)
     return {"ok": True, "provider": provider, "deleted": True}

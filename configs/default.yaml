@@ -100,6 +100,26 @@ training:
     timeout_penalty: -20.0      # 超时惩罚
     hallucination_penalty: -5.0 # 幻觉惩罚
 
+# ── 插件工具 ──────────────────────────────────────────────────────────
+#   plugins/ 目录下的 .py 文件自动被发现和注册。
+#   在此列出需要自定义配置的插件。
+  plugins:
+    - name: github_search
+      enabled: true
+      config:
+        timeout: 12.0
+        search_type: repositories
+    - name: rss_feed
+      enabled: true
+      config:
+        timeout: 15.0
+        max_entries: 20
+    - name: pubmed_search
+      enabled: true
+      config:
+        timeout: 12.0
+        max_results: 10
+
 # ── 调试与开发 ────────────────────────────────────────────────────────
 debug: false
 log_level: INFO                 # DEBUG | INFO | WARNING | ERROR

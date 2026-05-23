@@ -305,6 +305,17 @@ class VerifierConfig(BaseModel):
     min_evidence_count: int = Field(default=1, ge=0, description="最少证据数量, 低于此值判定为证据不足")
 
 
+class PluginEntryConfig(BaseModel):
+    """单个插件工具的配置条目。"""
+
+    name: str = Field(..., description="插件名称（匹配 ToolPlugin.name）")
+    enabled: bool = Field(default=True, description="是否启用")
+    config: dict[str, Any] = Field(
+        default_factory=dict,
+        description="插件自定义配置（由插件 config_schema 校验）",
+    )
+
+
 class ToolsConfig(BaseModel):
     """工具总配置。"""
 
@@ -312,6 +323,10 @@ class ToolsConfig(BaseModel):
     arxiv_search: ArxivSearchConfig = Field(default_factory=ArxivSearchConfig)
     paper_search: PaperSearchConfig = Field(default_factory=PaperSearchConfig)
     code_execution: CodeExecutionConfig = Field(default_factory=CodeExecutionConfig)
+    plugins: list[PluginEntryConfig] = Field(
+        default_factory=list,
+        description="已启用的插件工具配置列表",
+    )
 
 
 # ╔══════════════════════════════════════════════════════════════════════════════╗

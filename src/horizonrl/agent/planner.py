@@ -376,9 +376,10 @@ class LLMPlanner:
         >>> print(plan.total_count(), "个子任务")
     """
 
-    def __init__(self, llm_client, config=None):
+    def __init__(self, llm_client, config=None, tool_manager=None):
         self.llm = llm_client
         self.config = config
+        self.tool_manager = tool_manager
 
     async def plan(self, task: UserTask) -> PlanGraph:
         """用 LLM 将用户任务分解为 PlanGraph。
@@ -414,6 +415,9 @@ class LLMPlanner:
         tools_hint = ""
         if task.required_tools:
             tools_hint = f"必须使用的工具: {', '.join(task.required_tools)}"
+        elif self.tool_manager is not None:
+            all_tools = self.tool_manager.list_tools()
+            tools_hint = f"可选工具: {', '.join(all_tools)}"
         else:
             tools_hint = "可选工具: web_search, paper_search, code_execution"
 
@@ -460,12 +464,17 @@ JSON:"""
                 if pval in ("p0", "p1", "p2"):
                     priority = TaskPriority(pval)
 
+            # 动态获取可用工具列表（含插件）
+            valid_tools = set(
+                self.tool_manager.list_tools()
+            ) if self.tool_manager else {"web_search", "paper_search", "code_execution"}
+
             spec = TaskSpec(
                 id=sid,
                 name=str(item.get("name", f"子任务{len(specs)+1}")),
                 description=str(item.get("description", "")),
                 tool_names=[t for t in item.get("tool_names", [])
-                           if t in ("web_search", "paper_search", "code_execution")],
+                           if t in valid_tools],
                 depends_on=[],  # 稍后填充
                 priority=priority,
             )

@@ -12,6 +12,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
 from horizonrl.web.routes.chat import router as chat_router
+from horizonrl.web.routes.documents import router as documents_router
 from horizonrl.web.routes.report import router as report_router
 from horizonrl.web.routes.sessions import router as sessions_router
 from horizonrl.web.routes.settings import router as settings_router
@@ -37,6 +38,26 @@ async def lifespan(app: FastAPI):
     """应用生命周期管理。"""
     if not hasattr(app.state, "session_manager") or app.state.session_manager is None:
         app.state.session_manager = _get_default_session_manager()
+
+    # 初始化 DocumentStore（文档上传/RAG）
+    if not hasattr(app.state, "document_store") or app.state.document_store is None:
+        try:
+            from horizonrl.rag.document_store import DocumentStore
+            app.state.document_store = DocumentStore()
+        except Exception:
+            app.state.document_store = None
+
+    # 初始化 Embedding Client（文档索引用）
+    if not hasattr(app.state, "embedding_client") or app.state.embedding_client is None:
+        try:
+            from horizonrl.config.settings import load_config
+            from horizonrl.llm.client import LLMClient
+            cfg = load_config()
+            if cfg.embedding.api_key:
+                app.state.embedding_client = LLMClient(cfg.embedding)
+        except Exception:
+            pass
+
     yield
     app.state.session_manager.cleanup_expired()
 
@@ -85,6 +106,7 @@ def create_app(session_mgr=None) -> FastAPI:
     app.include_router(report_router)
     app.include_router(sessions_router)
     app.include_router(settings_router)
+    app.include_router(documents_router)
 
     # 根路由：返回 SPA 页面
     @app.get("/", include_in_schema=False)

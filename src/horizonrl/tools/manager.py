@@ -190,6 +190,8 @@ class ToolManager:
         self._tools: dict[str, Any] = {}  # tool_name → tool_instance
         self._stats: dict[str, ToolStats] = {}  # tool_name → ToolStats
         self._circuit_breakers: dict[str, CircuitBreaker] = {}
+        self._plugin_meta: dict[str, Any] = {}  # tool_name → ToolPlugin instance
+        self._tool_timeouts: dict[str, float] = {}  # tool_name → timeout
 
         # 默认超时和重试配置
         self._default_timeout: float = 12.0
@@ -210,7 +212,6 @@ class ToolManager:
         )
         self._default_max_retries = 2
         # 存储各工具类型的超时，供 call() 按工具名查询
-        self._tool_timeouts: dict[str, float] = {}
         for tool_type in ("web_search", "arxiv_search", "paper_search", "code_execution", "retrieval"):
             tool_cfg = getattr(tools_config, tool_type, None)
             if tool_cfg is not None:
@@ -233,6 +234,44 @@ class ToolManager:
             failure_threshold=self._circuit_failure_threshold,
             cooldown_seconds=self._circuit_cooldown_seconds,
         )
+
+    def register_plugin(self, name: str, plugin: Any) -> None:
+        """注册一个工具插件实例。
+
+        与 register() 相同基础功能，额外将插件存入 _plugin_meta，
+        供 AgentWorker 查询以使用插件的 build_params / extract_evidence。
+        """
+        self.register(name, plugin)
+        self._plugin_meta[name] = plugin
+
+    def get_plugin_meta(self, name: str) -> Any | None:
+        """获取已注册插件的元数据实例。内置工具返回 None。"""
+        return self._plugin_meta.get(name)
+
+    def register_plugins_from_registry(
+        self, registry: Any, plugin_configs: dict | None = None
+    ) -> list[str]:
+        """从 PluginRegistry 批量注册所有已发现插件。
+
+        Args:
+            registry: PluginRegistry 实例。
+            plugin_configs: {name: PluginConfig} 可选的配置覆盖。
+
+        Returns:
+            已注册的插件名称列表。
+        """
+        configs = plugin_configs or {}
+        instances = registry.instantiate_all(configs)
+        registered: list[str] = []
+        for instance in instances:
+            name = getattr(instance, "name", "")
+            if name:
+                self.register_plugin(name, instance)
+                registered.append(name)
+                # 从插件 config 读取超时覆盖
+                if hasattr(instance, "config") and hasattr(instance.config, "timeout"):
+                    self._tool_timeouts[name] = float(instance.config.timeout)
+        return registered
 
     def is_registered(self, name: str) -> bool:
         """检查工具是否已注册。"""

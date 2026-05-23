@@ -216,10 +216,10 @@ async def run_research_session(
         # 3. Planner
         planner: Planner = Planner(config)
 
-        # 4. LLMPlanner (如果有 LLM)
+        # 4. LLMPlanner (如果有 LLM) — 传入 tool_manager 让 Planner 感知插件
         if llm_client is not None:
             from horizonrl.agent.planner import LLMPlanner
-            planner = LLMPlanner(llm_client)
+            planner = LLMPlanner(llm_client, tool_manager=tool_manager)
 
         # 5. Writer
         if writer is None:
@@ -448,7 +448,7 @@ async def stream_research_session(
         planner = Planner(config)
         if llm_client is not None:
             from horizonrl.agent.planner import LLMPlanner
-            planner = LLMPlanner(llm_client)
+            planner = LLMPlanner(llm_client, tool_manager=tool_manager)
 
         if writer is None:
             writer_mode = "llm" if llm_client is not None else "template"
@@ -565,30 +565,56 @@ def _build_default_tool_manager(search_provider: str = "auto", offline: bool = F
     if offline or search_provider == "mock":
         from horizonrl.tools.mock import register_mock_tools
         register_mock_tools(mgr)
-        return mgr
+    else:
+        # Web Search
+        try:
+            from horizonrl.tools.web_search import WebSearchTool
+            mgr.register("web_search", WebSearchTool(provider=search_provider))
+        except Exception:
+            from horizonrl.tools.mock import MockWebSearch
+            mgr.register("web_search", MockWebSearch())
 
-    # Web Search
-    try:
-        from horizonrl.tools.web_search import WebSearchTool
-        mgr.register("web_search", WebSearchTool(provider=search_provider))
-    except Exception:
-        from horizonrl.tools.mock import MockWebSearch
-        mgr.register("web_search", MockWebSearch())
+        # Paper Search (多后端并发竞速: OpenAlex + S2 + Arxiv)
+        try:
+            from horizonrl.tools.paper_search import PaperSearchTool
+            mgr.register("paper_search", PaperSearchTool(max_results=5))
+        except Exception:
+            from horizonrl.tools.mock import MockPaperSearch
+            mgr.register("paper_search", MockPaperSearch())
 
-    # Paper Search (多后端并发竞速: OpenAlex + S2 + Arxiv)
-    try:
-        from horizonrl.tools.paper_search import PaperSearchTool
-        mgr.register("paper_search", PaperSearchTool(max_results=5))
-    except Exception:
-        from horizonrl.tools.mock import MockPaperSearch
-        mgr.register("paper_search", MockPaperSearch())
+        # Code Execution
+        try:
+            from horizonrl.tools.code_execution import CodeExecutionTool
+            mgr.register("code_execution", CodeExecutionTool(timeout=10.0))
+        except Exception:
+            from horizonrl.tools.mock import MockCodeExecution
+            mgr.register("code_execution", MockCodeExecution())
 
-    # Code Execution
-    try:
-        from horizonrl.tools.code_execution import CodeExecutionTool
-        mgr.register("code_execution", CodeExecutionTool(timeout=10.0))
-    except Exception:
-        from horizonrl.tools.mock import MockCodeExecution
-        mgr.register("code_execution", MockCodeExecution())
+    # 插件发现和注册 — 所有模式都执行
+    _discover_and_register_plugins(mgr)
 
     return mgr
+
+
+def _discover_and_register_plugins(mgr) -> None:
+    """扫描 plugins/ 目录，发现并注册所有工具插件。"""
+    import os
+    from pathlib import Path
+
+    plugin_dir = os.environ.get("HORIZON_PLUGIN_DIR", "plugins")
+    plugin_path = Path(plugin_dir)
+    if not plugin_path.is_dir():
+        return
+
+    try:
+        from horizonrl.plugins.registry import PluginRegistry
+    except ImportError:
+        return
+
+    registry = PluginRegistry()
+    discovered = registry.discover(plugin_path)
+
+    if not discovered:
+        return
+
+    mgr.register_plugins_from_registry(registry, {})

@@ -54,6 +54,7 @@ checkpoints/
 .DS_Store
 Thumbs.db
 desktop.ini
+*.docx
 
 # Claude
 .claude/cache/
@@ -61,6 +62,7 @@ desktop.ini
 CLAUDE.local.md
 .settings.local.json
 .claude/settings.local.json
+.agents/
 
 # MCP
 .claude/mcp_cache/
