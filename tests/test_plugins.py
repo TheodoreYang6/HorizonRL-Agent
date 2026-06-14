@@ -3,11 +3,8 @@
 from __future__ import annotations
 
 import json
-import os
-import sys
 import tempfile
 from pathlib import Path
-from unittest.mock import patch
 
 import pytest
 
@@ -20,7 +17,6 @@ from horizonrl.plugins.base import (
 )
 from horizonrl.plugins.registry import PluginRegistry
 from horizonrl.schemas.task import TaskSpec
-
 
 # ── 具体测试插件类 ────────────────────────────────────────────────────────
 
@@ -385,6 +381,7 @@ class TestAgentWorkerPluginDispatch:
     def test_execute_with_plugin_tool(self):
         """端到端: Worker.execute() 使用插件工具。"""
         import asyncio
+
         from horizonrl.agent.worker import AgentWorker
         from horizonrl.tools.manager import ToolManager
 
@@ -422,6 +419,7 @@ class TestExamplePluginEndToEnd:
     def test_example_plugin_execution(self):
         """验证示例插件可执行。"""
         import asyncio
+
         from plugins.example_plugin import EchoPlugin
 
         plugin = EchoPlugin()

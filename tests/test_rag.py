@@ -5,9 +5,6 @@ from __future__ import annotations
 import json
 import os
 import tempfile
-from pathlib import Path
-from unittest.mock import patch
-
 
 # ═══════════════════════════════════════════════════════════════════════════
 # Parser 测试
@@ -64,9 +61,9 @@ class TestParser:
             os.unlink(path)
 
     def test_parse_nonexistent_file(self):
-        from horizonrl.rag.parser import parse_document
-
         import pytest
+
+        from horizonrl.rag.parser import parse_document
         with pytest.raises(FileNotFoundError):
             parse_document("/nonexistent/file.txt")
 
@@ -117,7 +114,7 @@ class TestDocumentStore:
         assert abs(norm - 1.0) < 0.01
 
     def test_add_and_search(self):
-        from horizonrl.rag.document_store import DocumentStore, _ngram_embed
+        from horizonrl.rag.document_store import DocumentStore
 
         store = DocumentStore()
         result = store.add_document(
@@ -224,6 +221,7 @@ class TestRetrievalPlugin:
     def test_execute_no_query(self):
         import asyncio
         import json as _json
+
         from plugins.retrieval_tool import RetrievalPlugin
 
         plugin = RetrievalPlugin()
@@ -249,8 +247,8 @@ class TestRetrievalPlugin:
 class TestRetrievalWorkerIntegration:
     def test_worker_builds_params_for_retrieval(self):
         from horizonrl.agent.worker import AgentWorker
-        from horizonrl.tools.manager import ToolManager
         from horizonrl.schemas.task import TaskSpec
+        from horizonrl.tools.manager import ToolManager
         from plugins.retrieval_tool import RetrievalPlugin
 
         mgr = ToolManager()

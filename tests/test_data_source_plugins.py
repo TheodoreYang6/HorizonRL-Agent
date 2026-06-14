@@ -3,10 +3,7 @@
 from __future__ import annotations
 
 import json
-import os
-from pathlib import Path
 from unittest.mock import patch
-
 
 # ═══════════════════════════════════════════════════════════════════════════
 # 插件发现测试
@@ -90,6 +87,7 @@ class TestGithubPlugin:
     def test_execute_with_mock_response(self):
         import asyncio
         import json as _json
+
         from plugins.github_search import GithubPlugin
 
         plugin = GithubPlugin()
@@ -116,6 +114,7 @@ class TestGithubPlugin:
     def test_execute_handles_api_error(self):
         import asyncio
         import json as _json
+
         from plugins.github_search import GithubPlugin
 
         plugin = GithubPlugin()
@@ -228,6 +227,7 @@ class TestRssPlugin:
     def test_execute_with_mock_fetch(self):
         import asyncio
         import json as _json
+
         from plugins.rss_feed import RssPlugin
 
         plugin = RssPlugin()
@@ -245,6 +245,7 @@ class TestRssPlugin:
     def test_execute_no_url_returns_error(self):
         import asyncio
         import json as _json
+
         from plugins.rss_feed import RssPlugin
 
         plugin = RssPlugin()
@@ -355,6 +356,7 @@ class TestPubmedPlugin:
     def test_execute_with_mock(self):
         import asyncio
         import json as _json
+
         from plugins.pubmed_search import PubmedPlugin
 
         plugin = PubmedPlugin()
@@ -381,6 +383,7 @@ class TestPubmedPlugin:
     def test_execute_handles_api_error(self):
         import asyncio
         import json as _json
+
         from plugins.pubmed_search import PubmedPlugin
 
         plugin = PubmedPlugin()
@@ -411,8 +414,8 @@ class TestPubmedPlugin:
 class TestAgentWorkerDataSourceIntegration:
     def test_worker_builds_params_for_github(self):
         from horizonrl.agent.worker import AgentWorker
-        from horizonrl.tools.manager import ToolManager
         from horizonrl.schemas.task import TaskSpec
+        from horizonrl.tools.manager import ToolManager
         from plugins.github_search import GithubPlugin
 
         mgr = ToolManager()
@@ -428,8 +431,8 @@ class TestAgentWorkerDataSourceIntegration:
 
     def test_worker_builds_params_for_pubmed(self):
         from horizonrl.agent.worker import AgentWorker
-        from horizonrl.tools.manager import ToolManager
         from horizonrl.schemas.task import TaskSpec
+        from horizonrl.tools.manager import ToolManager
         from plugins.pubmed_search import PubmedPlugin
 
         mgr = ToolManager()
@@ -445,8 +448,8 @@ class TestAgentWorkerDataSourceIntegration:
 
     def test_worker_builds_params_for_rss(self):
         from horizonrl.agent.worker import AgentWorker
-        from horizonrl.tools.manager import ToolManager
         from horizonrl.schemas.task import TaskSpec
+        from horizonrl.tools.manager import ToolManager
         from plugins.rss_feed import RssPlugin
 
         mgr = ToolManager()
