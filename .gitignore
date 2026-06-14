@@ -91,3 +91,6 @@ resume_text_new.txt
 scripts/update_resume.py
 data/
 .chromadb/
+
+# Launch scripts (local only)
+claude-bypass.bat
