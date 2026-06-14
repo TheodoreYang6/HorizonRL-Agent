@@ -148,7 +148,7 @@ class TestToolPlugin:
         import asyncio
 
         plugin = _TestPlugin()
-        result = asyncio.get_event_loop().run_until_complete(
+        result = asyncio.run(
             plugin.execute(query="hello")
         )
         data = json.loads(result)
@@ -391,7 +391,7 @@ class TestAgentWorkerPluginDispatch:
 
         worker = AgentWorker(worker_id="w1", tool_manager=mgr)
         task = _make_task(tool_names=["test_tool"], description="hello")
-        result = asyncio.get_event_loop().run_until_complete(
+        result = asyncio.run(
             worker.execute(task)
         )
         assert result.success
@@ -423,7 +423,7 @@ class TestExamplePluginEndToEnd:
         from plugins.example_plugin import EchoPlugin
 
         plugin = EchoPlugin()
-        result = asyncio.get_event_loop().run_until_complete(
+        result = asyncio.run(
             plugin.execute(message="hello", repeat=2)
         )
         data = json.loads(result)

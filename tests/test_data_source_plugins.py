@@ -105,7 +105,7 @@ class TestGithubPlugin:
                 result = await plugin.execute(query="linux kernel")
                 return result
 
-        result = asyncio.get_event_loop().run_until_complete(run())
+        result = asyncio.run(run())
         items = _json.loads(result)
         assert len(items) == 1
         assert items[0]["title"] == "torvalds/linux"
@@ -124,7 +124,7 @@ class TestGithubPlugin:
                 result = await plugin.execute(query="nonexistent_xyzzy42")
                 return result
 
-        result = asyncio.get_event_loop().run_until_complete(run())
+        result = asyncio.run(run())
         items = _json.loads(result)
         assert len(items) == 1
         assert items[0]["is_mock"] is True
@@ -237,7 +237,7 @@ class TestRssPlugin:
                 result = await plugin.execute(url="http://example.com/feed", query="deep")
                 return result
 
-        result = asyncio.get_event_loop().run_until_complete(run())
+        result = asyncio.run(run())
         items = _json.loads(result)
         assert len(items) == 1
         assert items[0]["title"] == "Article Two"
@@ -249,7 +249,7 @@ class TestRssPlugin:
         from plugins.rss_feed import RssPlugin
 
         plugin = RssPlugin()
-        result = asyncio.get_event_loop().run_until_complete(
+        result = asyncio.run(
             plugin.execute(url="")
         )
         data = _json.loads(result)
@@ -374,7 +374,7 @@ class TestPubmedPlugin:
                     result = await plugin.execute(query="test query")
                     return result
 
-        result = asyncio.get_event_loop().run_until_complete(run())
+        result = asyncio.run(run())
         items = _json.loads(result)
         assert len(items) == 1
         assert items[0]["title"] == "Test Article"
@@ -393,7 +393,7 @@ class TestPubmedPlugin:
                 result = await plugin.execute(query="test query")
                 return result
 
-        result = asyncio.get_event_loop().run_until_complete(run())
+        result = asyncio.run(run())
         items = _json.loads(result)
         assert len(items) == 1
         assert items[0]["is_mock"] is True

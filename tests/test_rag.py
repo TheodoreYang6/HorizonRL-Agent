@@ -225,7 +225,7 @@ class TestRetrievalPlugin:
         from plugins.retrieval_tool import RetrievalPlugin
 
         plugin = RetrievalPlugin()
-        result = asyncio.get_event_loop().run_until_complete(
+        result = asyncio.run(
             plugin.execute(query="")
         )
         data = _json.loads(result)
